@@ -33,6 +33,8 @@ Arduino Uno controller for a 6-servo robotic arm with kinematics and serial comm
 | `JOG J<n> <degrees>` | Jog joint incrementally | `JOG J2 15` |
 | `GRIP <percent>` | Set gripper position | `GRIP 75` |
 | `STOP` | Stop current movement | `STOP` |
+| `DEBUG ON/OFF` | Enable/disable debug logging | `DEBUG ON` |
+| `DEBUG` | Show debug status | `DEBUG` |
 
 ## Examples
 
@@ -58,7 +60,20 @@ constexpr float L2 = 120;  // Shoulder to elbow length (mm)
 constexpr float L3 = 120;  // Elbow to wrist length (mm)
 constexpr float L4 = 40;   // Wrist adapter length (mm)
 constexpr float L5 = 60;   // Gripper extension length (mm)
+const float MOVE_SPEED = 50.0;  // Movement speed (degrees/second)
+const float MAIN_LOOP_DELAY = 20; // Control loop rate (ms) = 50Hz
 ```
+
+## Joint Limits
+
+| Joint | Min | Max | Description |
+|-------|-----|-----|-------------|
+| J1 (Base) | -160° | +160° | Base rotation |
+| J2 (Shoulder) | -10° | +180° | Shoulder pitch |
+| J3 (Elbow) | -10° | +180° | Elbow pitch |
+| J4 (Wrist Pitch) | -90° | +90° | Wrist up/down |
+| J5 (Wrist Yaw) | -180° | +180° | Wrist rotation |
+| J6 (Gripper) | 0% | 100% | Gripper opening |
 
 ## Coordinate System
 
@@ -72,8 +87,34 @@ constexpr float L5 = 60;   // Gripper extension length (mm)
 - **RY:** Pitch around Y-axis (degrees)
 - **RZ:** Yaw around Z-axis (degrees)
 
+## Debug Logging
+
+Enable detailed debugging to monitor robot operation:
+
+```
+DEBUG ON                    // Enable debug logging
+MOVEL X 150 Y 200 Z 100 RX 0 RY 0 RZ 0
+DEBUG OFF                   // Disable debug logging
+```
+
+**Debug output shows:**
+
+- Target positions and IK calculations
+- Joint movements and limit enforcement  
+- Real-time position/orientation during motion
+- Current joint angles every 0.5 seconds
+
+## Motion Control
+
+- **Speed:** 50 degrees/second movement speed
+- **Update Rate:** 50Hz control loop (20ms)
+- **Precision:** 0.1 degree positioning tolerance
+- **Safety:** Command blocking during movement
+- **Smooth Motion:** Interpolated movement between positions
+
 ## Troubleshooting
 
 - **Servo jitter:** Check power supply capacity
-- **"UNREACHABLE" errors:** Position outside workspace - try closer positions
+- **"UNREACHABLE" errors:** Position outside workspace - try closer positions  
 - **"ERR BUSY" errors:** Wait for movement to finish or use `STOP`
+- **Inaccurate positioning:** Enable debug mode to monitor joint angles
