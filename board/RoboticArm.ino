@@ -23,13 +23,40 @@ bool is_moving = false;  // Movement state
 bool debug_enabled = false;  // Debug logging flag
 
 // ========== UTILITY FUNCTIONS ==========
+void debug(const char* msg) {
+    if (debug_enabled) {
+        Serial.print("DBG: ");
+        Serial.println(msg);
+    }
+}
+
+void debugFloat(const char* msg, float val) {
+    if (debug_enabled) {
+        Serial.print("DBG: ");
+        Serial.print(msg);
+        Serial.println(val);
+    }
+}
+
+void debugPos(float x, float y, float z) {
+    if (debug_enabled) {
+        Serial.print("DBG: Target pos (");
+        Serial.print(x); Serial.print(",");
+        Serial.print(y); Serial.print(",");
+        Serial.print(z); Serial.println(")");
+    }
+}
 int angleToPulse(float deg) {
     return constrain(1500 + deg * 11.11, 500, 2500);  // Simple linear mapping
 }
 
 void setJoint(int j, float deg) {
     if (j >= 0 && j < 6) {
+        float orig_deg = deg;
         deg = constrain(deg, LIMITS_MIN[j], LIMITS_MAX[j]);
+        if (orig_deg != deg) {
+            debugFloat("Joint limit J", (float)(j+1));
+        }
         angles[j] = deg;
         servos[j].writeMicroseconds(angleToPulse(deg));
     }
@@ -42,6 +69,7 @@ void setTargetJoint(int j, float deg) {
 }
 
 void startSmoothMove() {
+    debug("Motion start");
     is_moving = true;
 }
 
@@ -49,17 +77,19 @@ void updateSmoothMotion() {
     if (!is_moving) return;
     
     bool all_reached = true;
+    static unsigned long last_debug = 0;
+    bool show_debug = debug_enabled && (millis() - last_debug > 500);  // Debug every 0.5s during motion
     
     for (int i = 0; i < 6; i++) {
         float diff = target_angles[i] - angles[i];
         
-        if (abs(diff) > 1.0) {  // 1 degree tolerance
+        if (abs(diff) > 0.1) {  // 0.1 degree tolerance for better precision
             all_reached = false;
             
             // Calculate step based on speed and actual loop delay
             float step = MOVE_SPEED * (MAIN_LOOP_DELAY / 1000.0);  // Convert ms to seconds
             if (abs(diff) < step) {
-                angles[i] = target_angles[i];
+                angles[i] = target_angles[i];  // Snap to exact target
             } else {
                 angles[i] += (diff > 0) ? step : -step;
             }
@@ -69,7 +99,28 @@ void updateSmoothMotion() {
     }
     
     if (all_reached) {
+        debug("Motion complete");
         is_moving = false;
+    } else if (show_debug) {
+        // Calculate and show current position during movement
+        float pos[3], rot[3];
+        forwardKin6DOF(pos, rot);
+        
+        if (debug_enabled) {
+            Serial.print("DBG: Moving at (");
+            Serial.print(pos[0]); Serial.print(",");
+            Serial.print(pos[1]); Serial.print(",");
+            Serial.print(pos[2]); Serial.print(") (");
+            Serial.print(rot[0]); Serial.print(",");
+            Serial.print(rot[1]); Serial.print(",");
+            Serial.print(rot[2]); Serial.print(") J[");
+            for (int i = 0; i < 6; i++) {
+                Serial.print(angles[i]);
+                if (i < 5) Serial.print(",");
+            }
+            Serial.println("]");
+        }
+        last_debug = millis();
     }
 }
 
@@ -128,6 +179,7 @@ bool inverseKin6DOF(float x, float y, float z, float rx, float ry, float rz, flo
     
     // Check reachability
     if (d > L2 + L3 || d < abs(L2 - L3) || d < 0.1) {
+        debug("IK unreachable");
         return false;  // Prevent division by zero
     }
     
@@ -206,13 +258,14 @@ void processCmd() {
     cmd.toUpperCase();
     
     // Block movement commands during execution (except status/help/stop commands)
-    if (is_moving && cmd != "HELP" && cmd != "GET_STATE" && cmd != "STOP") {
+    if (is_moving && cmd != "HELP" && cmd != "GET_STATE" && cmd != "STOP" && !cmd.startsWith("DEBUG")) {
+        debug("Command blocked - moving");
         Serial.println("ERR BUSY - Wait for current movement to finish");
         return;
     }
     
     if (cmd == "HELP") {
-        Serial.println("OK Commands: HELP, GET_STATE, MOVEJ, MOVEL, JOG, GRIP, HOME, STOP");
+        Serial.println("OK Commands: HELP, GET_STATE, MOVEJ, MOVEL, JOG, GRIP, HOME, STOP, DEBUG");
         Serial.println("Examples:");
         Serial.println("  MOVEJ J2 45");
         Serial.println("  MOVEL X 150 Y 200 Z 100 RX 0 RY 0 RZ 0");
@@ -222,7 +275,10 @@ void processCmd() {
         printState();
         
     } else if (cmd == "HOME") {
-        for (int i = 0; i < 6; i++) setTargetJoint(i, 0);
+        debug("Homing all joints");
+        for (int i = 0; i < 6; i++) {
+            setTargetJoint(i, 0.0);  // Ensure exact zero
+        }
         startSmoothMove();
         Serial.println("OK Moving home");
         
@@ -239,6 +295,7 @@ void processCmd() {
                 int j = joint.substring(1).toInt() - 1;
                 if (j >= 0 && j < 6) {
                     float angle = getFloat(params);
+                    debugFloat("MovJ target J", (float)(j+1));
                     setTargetJoint(j, angle);
                     startSmoothMove();
                     Serial.println("OK Moving J" + String(j+1) + " to " + String(angle));
@@ -276,8 +333,10 @@ void processCmd() {
         }
         
         
+        debugPos(x, y, z);
         float result_angles[6];
         if (inverseKin6DOF(x, y, z, rx, ry, rz, result_angles)) {
+            debug("IK success");
             for (int i = 0; i < 5; i++) setTargetJoint(i, result_angles[i]);  // Set target for first 5 joints
             startSmoothMove();
             Serial.println("OK Moving to pose");
@@ -306,8 +365,10 @@ void processCmd() {
                     startSmoothMove();
                     
                     if (limited_angle != requested_angle) {
+                        debugFloat("Limit hit J", (float)(j+1));
                         Serial.println("OK J" + String(j+1) + " limit reached at " + String(limited_angle));
                     } else {
+                        debugFloat("Jog J", (float)(j+1));
                         Serial.println("OK Jogging J" + String(j+1) + " to " + String(limited_angle));
                     }
                 } else {
@@ -320,13 +381,26 @@ void processCmd() {
         
     } else if (cmd.startsWith("GRIP ")) {
         float percent = cmd.substring(5).toFloat();
+        debugFloat("Grip to ", percent);
         setTargetJoint(5, percent);
         startSmoothMove();
         Serial.println("OK Moving gripper");
         
     } else if (cmd == "STOP") {
+        debug("Emergency stop");
         is_moving = false;
         Serial.println("OK Movement stopped");
+        
+    } else if (cmd == "DEBUG ON") {
+        debug_enabled = true;
+        Serial.println("OK Debug enabled");
+        
+    } else if (cmd == "DEBUG OFF") {
+        debug_enabled = false;
+        Serial.println("OK Debug disabled");
+        
+    } else if (cmd == "DEBUG") {
+        Serial.println(debug_enabled ? "OK Debug ON" : "OK Debug OFF");
         
     } else {
         Serial.println("ERR Unknown command");
