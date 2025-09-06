@@ -6,12 +6,12 @@
 #include <Servo.h>
 
 // ========== CONFIGURATION ==========
-constexpr float PLATFORM_HEIGHT = 100;  // Platform height above ground (mm)
-constexpr float L1 = 10, L2 = 120, L3 = 120, L4 = 40, L5 = 60;  // Link lengths (mm)
+constexpr float PLATFORM_HEIGHT = 50;  // Platform height above ground (mm)
+constexpr float L1 = 30, L2 = 80, L3 = 80, L4 = 10, L5 = 0;  // Link lengths (mm)
 constexpr uint8_t PINS[6] = {3, 5, 6, 9, 10, 11};  // Servo pins
 constexpr float SERVO_MIN_ANGLES[6] = {0, 0, 0, 0, 0, 0};
-constexpr float SERVO_MAX_ANGLES[6] = {270, 180, 180, 180, 270, 180};
-constexpr float SERVO_NEUTRALS[6] = {135, 90, 90, 90, 135, 90};  // Based on LIMITS arrays
+constexpr float SERVO_MAX_ANGLES[6] = {180, 180, 180, 180, 180, 180};
+constexpr float SERVO_NEUTRALS[6] = {90, 90, 90, 90, 90, 90};  // Based on LIMITS arrays
 constexpr float MOVE_SPEED = 100.0;  // degrees per second  
 constexpr float MAIN_LOOP_DELAY = 20; // 50Hz update rate for smooth motion
 
