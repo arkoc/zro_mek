@@ -2,6 +2,8 @@
 
 Arduino Uno controller for a 6-servo robotic arm with kinematics and serial commands.
 
+🚀 **Try it online:** [Wokwi Simulator](https://wokwi.com/projects/441360464016898049)
+
 ## Hardware Setup
 
 | Servo | Joint | Pin | Function |
@@ -26,8 +28,8 @@ Arduino Uno controller for a 6-servo robotic arm with kinematics and serial comm
 | Command | Description | Example |
 |---------|-------------|---------|
 | `HELP` | Show all commands | `HELP` |
-| `GET_STATE` | Show current robot state | `GET_STATE` |
-| `HOME` | Move all joints to zero | `HOME` |
+| `STATE` | Show current robot state | `STATE` |
+| `HOME` | Move all joints to neutral (90°) | `HOME` |
 | `MOVEJ J<n> <angle>` | Move joint to angle | `MOVEJ J2 45` |
 | `MOVEL X <x> Y <y> Z <z> RX <rx> RY <ry> RZ <rz>` | Move to position | `MOVEL X 150 Y 200 Z 100 RX 0 RY 0 RZ 0` |
 | `JOG J<n> <degrees>` | Jog joint incrementally | `JOG J2 15` |
@@ -39,8 +41,8 @@ Arduino Uno controller for a 6-servo robotic arm with kinematics and serial comm
 ## Examples
 
 ```
-HOME                                    // Move to home position
-GET_STATE                              // See current robot state  
+HOME                                    // Move to neutral position (90°)
+STATE                                  // See current robot state  
 MOVEJ J1 90                           // Move base to 90°
 MOVEJ J2 45                           // Move shoulder to 45°
 MOVEL X 150 Y 200 Z 100 RX 0 RY 0 RZ 0  // Move to position
@@ -66,14 +68,14 @@ const float MAIN_LOOP_DELAY = 20; // Control loop rate (ms) = 50Hz
 
 ## Joint Limits
 
-| Joint | Min | Max | Description |
-|-------|-----|-----|-------------|
-| J1 (Base) | -160° | +160° | Base rotation |
-| J2 (Shoulder) | -10° | +180° | Shoulder pitch |
-| J3 (Elbow) | -10° | +180° | Elbow pitch |
-| J4 (Wrist Pitch) | -90° | +90° | Wrist up/down |
-| J5 (Wrist Yaw) | -180° | +180° | Wrist rotation |
-| J6 (Gripper) | 0% | 100% | Gripper opening |
+| Joint | Min | Max | Neutral | Description |
+|-------|-----|-----|---------|-------------|
+| J1 (Base) | 0° | 270° | 90° | Base rotation |
+| J2 (Shoulder) | 0° | 270° | 90° | Shoulder pitch |
+| J3 (Elbow) | 0° | 270° | 90° | Elbow pitch |
+| J4 (Wrist Pitch) | 0° | 270° | 90° | Wrist up/down |
+| J5 (Wrist Yaw) | 0° | 270° | 90° | Wrist rotation |
+| J6 (Gripper) | 0° | 270° | 90° | Gripper opening |
 
 ## Coordinate System
 
