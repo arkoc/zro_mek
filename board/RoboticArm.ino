@@ -22,6 +22,9 @@ float target_angles[6];  // Target joint angles (set to servo neutrals in setup)
 String cmd = "";  // Command buffer
 bool is_moving = false;  // Movement state
 bool debug_enabled = false;  // Debug logging flag
+bool test_running = false;   // Test sequence running flag
+uint8_t test_step = 0;       // Current test step
+unsigned long test_timer = 0;  // Test step timer
 
 // ========== SERVO CONFIGURATION ==========
 inline float servoToKinematics(int joint, float servo_angle) {
@@ -42,28 +45,22 @@ void debug(const char* msg) {
     }
 }
 
-void debugFloat(const char* msg, float val) {
-    if (debug_enabled) {
-        Serial.print("DBG: ");
-        Serial.print(msg);
-        Serial.println(val);
-    }
-}
 
 void debugPos(float x, float y, float z) {
     if (debug_enabled) {
-        Serial.print("DBG: Target pos (");
-        Serial.print(x); Serial.print(",");
-        Serial.print(y); Serial.print(",");
-        Serial.print(z); Serial.println(")");
+        Serial.print(F("DBG: Target pos ("));
+        Serial.print(x); Serial.print(F(","));
+        Serial.print(y); Serial.print(F(","));
+        Serial.print(z); Serial.println(F(")"));
     }
 }
 void setJoint(int j, float deg) {
     if (j >= 0 && j < 6) {
         float orig_deg = deg;
         deg = constrain(deg, SERVO_MIN_ANGLES[j], SERVO_MAX_ANGLES[j]);
-        if (orig_deg != deg) {
-            debugFloat("Joint limit J", (float)(j+1));
+        if (orig_deg != deg && debug_enabled) {
+            Serial.print(F("DBG: Joint limit J"));
+            Serial.println(j+1);
         }
         angles[j] = deg;
         servos[j].write(deg);
@@ -79,6 +76,128 @@ void setTargetJoint(int j, float deg) {
 void startSmoothMove() {
     debug("Motion start");
     is_moving = true;
+}
+
+// Test position calculation based on robot dimensions
+// Calculate positions as percentages of max reach and height
+void calculateTestPosition(int test_index, float* x, float* y, float* z, float* ry, float* rz) {
+    float max_reach = L2 + L3 + L4;  // Maximum horizontal reach
+    float max_height = PLATFORM_HEIGHT + L1 + L2 + L3 + L4;  // Maximum height
+    float min_height = PLATFORM_HEIGHT + L1;  // Minimum reachable height
+    float safe_reach = max_reach * 0.7;  // 70% of max reach for safety
+    
+    switch (test_index) {
+        case 0: case 6:  // HOME positions
+            *x = 0; *y = PLATFORM_HEIGHT + L1 + L2; *z = 0;
+            *ry = 0; *rz = 0;
+            break;
+        case 1:  // CLOSE HIGH LEFT - very close to base, up high, wrist angled
+            *x = 0; 
+            *y = min_height + (max_height - min_height) * 0.8;
+            *z = safe_reach * 0.3;
+            *ry = -30; *rz = -45;
+            break;
+        case 2:  // FAR RIGHT LOW - far reach right and forward, down low
+            *x = safe_reach * 0.7;
+            *y = min_height + (max_height - min_height) * 0.4;
+            *z = safe_reach * 0.8;
+            *ry = 25; *rz = 30;
+            break;
+        case 3:  // FAR LEFT HIGH - far reach left, up high, wrist tilted  
+            *x = -safe_reach * 0.6;
+            *y = min_height + (max_height - min_height) * 0.7;
+            *z = safe_reach * 0.5;
+            *ry = -20; *rz = -30;
+            break;
+        case 4:  // CLOSE RIGHT LOW - close to base, right side, low, wrist extreme
+            *x = safe_reach * 0.4;
+            *y = min_height + (max_height - min_height) * 0.3;
+            *z = safe_reach * 0.4;
+            *ry = 40; *rz = 45;
+            break;
+        case 5:  // FAR LEFT MID - far reach left, mid height, wrist opposite
+            *x = -safe_reach * 0.5;
+            *y = min_height + (max_height - min_height) * 0.6;
+            *z = safe_reach * 0.7;
+            *ry = 30; *rz = -40;
+            break;
+    }
+}
+
+void runTestSequence() {
+    if (!test_running || is_moving) return;
+    
+    if (millis() - test_timer < 3000) return;  // Wait 3 seconds between moves
+    
+    if (test_step >= 7) {
+        Serial.println(F("TEST: Complete - All extreme positions tested"));
+        test_running = false;
+        test_step = 0;
+        return;
+    }
+    
+    // Calculate test position based on robot dimensions
+    float x, y, z, ry, rz;
+    calculateTestPosition(test_step, &x, &y, &z, &ry, &rz);
+    
+    Serial.print(F("TEST: Step "));
+    Serial.print(test_step + 1);
+    
+    // Special case for HOME positions
+    if ((test_step == 0) || (test_step == 6)) {
+        Serial.println(F(" - HOME"));
+        for (int i = 0; i < 6; i++) setTargetJoint(i, SERVO_NEUTRALS[i]);
+        startSmoothMove();
+    } else {
+        // Descriptive test names for extreme kinematic positions
+        const char* test_names[] = {
+            "", "CLOSE-HIGH-LEFT", "FAR-RIGHT-LOW", "FAR-LEFT-HIGH", 
+            "CLOSE-RIGHT-LOW", "FAR-LEFT-MID"
+        };
+        
+        Serial.print(F(" - "));
+        Serial.print(test_names[test_step]);
+        Serial.print(F(" X")); Serial.print(x, 1);
+        Serial.print(F(" Y")); Serial.print(y, 1); 
+        Serial.print(F(" Z")); Serial.print(z, 1);
+        Serial.print(F(" RY")); Serial.print(ry, 1);
+        Serial.print(F(" RZ")); Serial.print(rz, 1);
+        Serial.println();
+        
+        // Use inverse kinematics - this will exercise all joints maximally
+        float result_angles[6];
+        if (inverseKin6DOF(x, y, z, 0, ry, rz, result_angles)) {
+            // Set all 6 joints including gripper for complete system test
+            for (int i = 0; i < 5; i++) {
+                setTargetJoint(i, result_angles[i]);
+            }
+            // Set gripper based on test step for variety
+            if (test_step == 2 || test_step == 4) {
+                setTargetJoint(5, 60);  // Close gripper for some tests
+            } else {
+                setTargetJoint(5, 120); // Open gripper for others
+            }
+            startSmoothMove();
+            
+            // Debug: Show joint angles being commanded
+            if (debug_enabled) {
+                Serial.print(F("DBG: Commanding joints: "));
+                for (int i = 0; i < 5; i++) {
+                    Serial.print(F("J")); Serial.print(i+1); 
+                    Serial.print(F("=")); Serial.print(result_angles[i]);
+                    Serial.print(F(" "));
+                }
+                Serial.println();
+            }
+        } else {
+            Serial.print(F("TEST: "));
+            Serial.print(test_names[test_step]);
+            Serial.println(F(" unreachable - skipping"));
+        }
+    }
+    
+    test_step++;
+    test_timer = millis();
 }
 
 void updateSmoothMotion() {
@@ -111,12 +230,12 @@ void updateSmoothMotion() {
         is_moving = false;
     } else if (show_debug) {
         // Show current joint angles during movement (avoid expensive forward kinematics)
-        Serial.print("DBG: Moving J[");
+        Serial.print(F("DBG: Moving J["));
         for (int i = 0; i < 6; i++) {
             Serial.print(angles[i]);
-            if (i < 5) Serial.print(",");
+            if (i < 5) Serial.print(F(","));
         }
-        Serial.println("]");
+        Serial.println(F("]"));
         last_debug = millis();
     }
 }
@@ -248,7 +367,7 @@ void printState() {
     float limits[6];
     getWorkspaceLimits(limits);
     
-    Serial.println("OK {");
+    Serial.println(F("OK {"));
     Serial.print("  \"joints\": [");
     for (int i = 0; i < 6; i++) {
         Serial.print(angles[i]);
@@ -274,19 +393,19 @@ void processCmd() {
     cmd.trim();
     cmd.toUpperCase();
     
-    // Block movement commands during execution (except status/help/stop commands)
-    if (is_moving && cmd != "HELP" && cmd != "STATE" && cmd != "STOP" && !cmd.startsWith("DEBUG")) {
+    // Block movement commands during execution (except status/help/stop/test commands)
+    if (is_moving && cmd != "HELP" && cmd != "STATE" && cmd != "STOP" && cmd != "TEST" && !cmd.startsWith("DEBUG")) {
         debug("Command blocked - moving");
-        Serial.println("ERR BUSY - Wait for current movement to finish");
+        Serial.println(F("ERR BUSY - Wait for current movement to finish"));
         return;
     }
     
     if (cmd == "HELP") {
-        Serial.println("OK Commands: HELP, STATE, MOVEJ, MOVEL, JOG, GRIP, HOME, STOP, DEBUG");
-        Serial.println("Examples:");
-        Serial.println("  MOVEJ J2 45");
-        Serial.println("  MOVEL X 150 Y 200 Z 100 RX 0 RY 0 RZ 0");
-        Serial.println("  JOG J1 15");
+        Serial.println(F("OK Commands: HELP, STATE, MOVEJ, MOVEL, JOG, GRIP, HOME, STOP, TEST, DEBUG"));
+        Serial.println(F("Examples:"));
+        Serial.println(F("  MOVEJ J2 45"));
+        Serial.println(F("  MOVEL X 150 Y 200 Z 100 RX 0 RY 0 RZ 0"));
+        Serial.println(F("  JOG J1 15"));
         
     } else if (cmd == "STATE") {
         printState();
@@ -297,13 +416,13 @@ void processCmd() {
             setTargetJoint(i, SERVO_NEUTRALS[i]);  // Move to neutral position
         }
         startSmoothMove();
-        Serial.println("OK Moving home");
+        Serial.println(F("OK Moving home"));
         
     } else if (cmd.startsWith("MOVEJ ")) {
         String params = cmd.substring(6);
         int spaceIdx = params.indexOf(' ');
         if (spaceIdx == -1) {
-            Serial.println("ERR Missing parameters");
+            Serial.println(F("ERR Missing parameters"));
         } else {
             String joint = params.substring(0, spaceIdx);
             params = params.substring(spaceIdx + 1);
@@ -313,7 +432,10 @@ void processCmd() {
                 if (j >= 0 && j < 6) {
                     float angle = getFloat(params);
                     float limited_angle = constrain(angle, SERVO_MIN_ANGLES[j], SERVO_MAX_ANGLES[j]);
-                    debugFloat("MovJ target J", (float)(j+1));
+                    if (debug_enabled) {
+                        Serial.print(F("DBG: MovJ target J"));
+                        Serial.println(j+1);
+                    }
                     setTargetJoint(j, limited_angle);
                     startSmoothMove();
                     
@@ -323,10 +445,10 @@ void processCmd() {
                         Serial.println("OK Moving J" + String(j+1) + " to " + String(angle));
                     }
                 } else {
-                    Serial.println("ERR Invalid joint");
+                    Serial.println(F("ERR Invalid joint"));
                 }
             } else {
-                Serial.println("ERR Invalid joint format");
+                Serial.println(F("ERR Invalid joint format"));
             }
         }
         
@@ -371,7 +493,7 @@ void processCmd() {
         String params = cmd.substring(4);
         int spaceIdx = params.indexOf(' ');
         if (spaceIdx == -1) {
-            Serial.println("ERR Missing parameters");
+            Serial.println(F("ERR Missing parameters"));
         } else {
             String joint = params.substring(0, spaceIdx);
             params = params.substring(spaceIdx + 1);
@@ -388,23 +510,32 @@ void processCmd() {
                     startSmoothMove();
                     
                     if (limited_angle != requested_angle) {
-                        debugFloat("Limit hit J", (float)(j+1));
+                        if (debug_enabled) {
+                            Serial.print(F("DBG: Limit hit J"));
+                            Serial.println(j+1);
+                        }
                         Serial.println("OK J" + String(j+1) + " limit reached at " + String(limited_angle));
                     } else {
-                        debugFloat("Jog J", (float)(j+1));
+                        if (debug_enabled) {
+                            Serial.print(F("DBG: Jog J"));
+                            Serial.println(j+1);
+                        }
                         Serial.println("OK Jogging J" + String(j+1) + " to " + String(limited_angle));
                     }
                 } else {
-                    Serial.println("ERR Invalid joint");
+                    Serial.println(F("ERR Invalid joint"));
                 }
             } else {
-                Serial.println("ERR Invalid joint format");
+                Serial.println(F("ERR Invalid joint format"));
             }
         }
         
     } else if (cmd.startsWith("GRIP ")) {
         float percent = cmd.substring(5).toFloat();
-        debugFloat("Grip to ", percent);
+        if (debug_enabled) {
+            Serial.print(F("DBG: Grip to "));
+            Serial.println(percent);
+        }
         setTargetJoint(5, percent);
         startSmoothMove();
         Serial.println("OK Moving gripper");
@@ -412,7 +543,13 @@ void processCmd() {
     } else if (cmd == "STOP") {
         debug("Emergency stop");
         is_moving = false;
-        Serial.println("OK Movement stopped");
+        if (test_running) {
+            test_running = false;
+            test_step = 0;
+            Serial.println("OK Movement and test stopped");
+        } else {
+            Serial.println("OK Movement stopped");
+        }
         
     } else if (cmd == "DEBUG ON") {
         debug_enabled = true;
@@ -424,6 +561,16 @@ void processCmd() {
         
     } else if (cmd == "DEBUG") {
         Serial.println(debug_enabled ? "OK Debug ON" : "OK Debug OFF");
+        
+    } else if (cmd == "TEST") {
+        if (test_running) {
+            Serial.println(F("ERR Test already running - use STOP to cancel"));
+        } else {
+            Serial.println(F("OK Starting workspace test sequence - 7 steps"));
+            test_running = true;
+            test_step = 0;
+            test_timer = millis();
+        }
         
     } else {
         Serial.println("ERR Unknown command");
@@ -462,6 +609,9 @@ void loop() {
     
     // Update smooth motion
     updateSmoothMotion();
+    
+    // Run test sequence if active
+    runTestSequence();
     
     delay(MAIN_LOOP_DELAY);
 }
