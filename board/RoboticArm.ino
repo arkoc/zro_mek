@@ -1,5 +1,5 @@
 /*
- * ZRO_MEK 6-DOF Robotic Arm Controller - Lightweight Version for Arduino Uno
+ * ZRO_MEK 6-DOF (-1) Robotic Arm Controller - Lightweight Version for Arduino Uno
  * Reduced memory footprint for simulators
  */
 
@@ -7,7 +7,7 @@
 
 // ========== CONFIGURATION ==========
 constexpr float PLATFORM_HEIGHT = 50;  // Platform height above ground (mm)
-constexpr float L1 = 30, L2 = 80, L3 = 80, L4 = 10, L5 = 0;  // Link lengths (mm)
+constexpr float L1 = 30, L2 = 70, L3 = 70, L4 = 10, L5 = 0;  // Link lengths (mm)
 constexpr uint8_t PINS[6] = {3, 5, 6, 9, 10, 11};  // Servo pins
 constexpr float SERVO_MIN_ANGLES[6] = {0, 0, 0, 0, 0, 0};
 constexpr float SERVO_MAX_ANGLES[6] = {180, 180, 180, 180, 180, 180};
@@ -45,7 +45,6 @@ void debug(const char* msg) {
     }
 }
 
-
 void debugPos(float x, float y, float z) {
     if (debug_enabled) {
         Serial.print(F("DBG: Target pos ("));
@@ -54,6 +53,7 @@ void debugPos(float x, float y, float z) {
         Serial.print(z); Serial.println(F(")"));
     }
 }
+
 void setJoint(int j, float deg) {
     if (j >= 0 && j < 6) {
         float orig_deg = deg;
@@ -261,23 +261,25 @@ void forwardKin6DOF(float* pos, float* rot) {
     float j4 = servoToKinematics(3, angles[3]) * DEG_TO_RAD;
     float j5 = servoToKinematics(4, angles[4]) * DEG_TO_RAD;
     
-    // Position calculation (same as 3DOF but includes wrist)
+    // Position calculation
     float s1 = sin(j1), c1 = cos(j1);
     float s2 = sin(j2), c2 = cos(j2);
     float s23 = sin(j2 + j3), c23 = cos(j2 + j3);
-    float s4 = sin(j4), c4 = cos(j4);
-    float s5 = sin(j5), c5 = cos(j5);
     
-    // End-effector position (wrist center, not gripper tip)
-    float r = L2 * c2 + L3 * c23 + L4 * c23 * c4;  // Remove L5 - gripper doesn't affect pose
+    // End-effector position (wrist center + L4 extension)
+    float wrist_r = L2 * c2 + L3 * c23;  // Distance to wrist center in arm plane
+    float wrist_h = L2 * s2 + L3 * s23;  // Height to wrist center
+    
+    // Add L4 extension in the direction of the arm plane
+    float r = wrist_r + L4; 
     pos[0] = r * s1;  // x
-    pos[1] = PLATFORM_HEIGHT + L1 + L2 * s2 + L3 * s23 + L4 * s23 * c4;  // y (includes platform, no L5)
+    pos[1] = PLATFORM_HEIGHT + L1 + wrist_h;  // y
     pos[2] = r * c1;  // z
     
     // End-effector orientation (simplified for direct wrist control)
-    rot[0] = 0;  // Roll - this arm has no roll capability around end-effector axis
-    rot[1] = j4 * RAD_TO_DEG;  // Pitch - direct wrist pitch
-    rot[2] = j5 * RAD_TO_DEG;  // Yaw - direct wrist yaw
+    rot[0] = 0;  // Roll - no dedicated roll joint (base rotation affects global orientation)
+    rot[1] = j4 * RAD_TO_DEG;  // Pitch - wrist up/down (J4)
+    rot[2] = j5 * RAD_TO_DEG;  // Yaw - wrist rotation (J5)
 }
 
 // 6-DOF Inverse Kinematics
@@ -316,8 +318,8 @@ bool inverseKin6DOF(float x, float y, float z, float rx, float ry, float rz, flo
     // Step 4: Solve wrist orientation (J4, J5)
     
     // Wrist control - direct degree mapping
-    result_angles[3] = kinematicsToServo(3, ry);  // Wrist pitch
-    result_angles[4] = kinematicsToServo(4, rz);  // Wrist yaw
+    result_angles[3] = kinematicsToServo(3, ry);  // Wrist pitch (J4)
+    result_angles[4] = kinematicsToServo(4, rz);  // Wrist yaw (J5)
     
     if (debug_enabled) {
         Serial.print("DBG: Wrist calc - ry:");
