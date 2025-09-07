@@ -1,46 +1,59 @@
 /*
- * ZRO_MEK 6-DOF (-1) Robotic Arm Controller - Lightweight Version for Arduino Uno
- * Reduced memory footprint for simulators
+ * ZRO_MEK 6-DOF Anthropomorphic Arm with Spherical Wrist + Gripper
+ * Based on classical Denavit-Hartenberg convention
  */
 
 #include <Servo.h>
+#include <math.h>
 
-// ========== CONFIGURATION ==========
-constexpr float PLATFORM_HEIGHT = 50;  // Platform height above ground (mm)
-constexpr float L1 = 30, L2 = 70, L3 = 70, L4 = 10, L5 = 0;  // Link lengths (mm)
-constexpr uint8_t PINS[6] = {3, 5, 6, 9, 10, 11};  // Servo pins
-constexpr float SERVO_MIN_ANGLES[6] = {0, 0, 0, 0, 0, 0};
-constexpr float SERVO_MAX_ANGLES[6] = {180, 180, 180, 180, 180, 180};
-constexpr float SERVO_NEUTRALS[6] = {90, 90, 90, 90, 90, 90};  // Based on LIMITS arrays
+// Arduino.h already defines DEG_TO_RAD, RAD_TO_DEG, and HALF_PI
+
+// ========== ROBOT CONFIGURATION ==========
+// Complete DH Parameter Table - Configure for YOUR specific robot
+// Based on classical Denavit-Hartenberg convention
+//
+// | Link |  a_i (mm) | α_i (rad)  | d_i (mm) | θ_i (variable) |
+// |------|-----------|------------|----------|----------------|
+// |  1   |    a1     |    α1      |    d1    | θ₁ (J1)        |
+// |  2   |    a2     |    α2      |    d2    | θ₂ (J2)        |
+// |  3   |    a3     |    α3      |    d3    | θ₃ (J3)        |
+// |  4   |    a4     |    α4      |    d4    | θ₄ (J4)        |
+// |  5   |    a5     |    α5      |    d5    | θ₅ (J5)        |
+// |  6   |    a6     |    α6      |    d6    | θ₆ (J6)        |
+
+// *** CONFIGURE YOUR ROBOT'S DH PARAMETERS HERE ***
+// Link lengths (mm)
+constexpr float DH_a[6] = {30, 70, 70, 0, 0, 0};   
+// Link offsets (mm)
+constexpr float DH_d[6] = {0, 0, 0, 100, 0, 50};  
+
+
+// Link twists (rad)          
+constexpr float DH_alpha[6] = {HALF_PI, 0, HALF_PI, -HALF_PI, HALF_PI, 0};          
+
+
+// Servo configuration - 7 servos total (6 DOF + gripper)
+constexpr uint8_t PINS[7] = {3, 5, 6, 9, 10, 11, 12};  // Servo pins
+constexpr float SERVO_MIN_ANGLES[7] = {0, 0, 0, 0, 0, 0, 0};
+constexpr float SERVO_MAX_ANGLES[7] = {180, 180, 180, 180, 180, 180, 180};
+constexpr float SERVO_NEUTRALS[7] = {90, 90, 90, 90, 90, 90, 90};
+
+// Motion control
 constexpr float MOVE_SPEED = 100.0;  // degrees per second  
 constexpr float MAIN_LOOP_DELAY = 20; // 50Hz update rate for smooth motion
 
 // ========== GLOBAL VARIABLES ==========
-Servo servos[6];
-float angles[6];  // Current joint angles (set to servo neutrals in setup)
-float target_angles[6];  // Target joint angles (set to servo neutrals in setup)
-String cmd = "";  // Command buffer
+Servo servos[7];
+float angles[7];         // Current joint angles (0-6: joints, gripper)
+float target_angles[7];  // Target joint angles
+String cmd = "";         // Command buffer
 bool is_moving = false;  // Movement state
 bool debug_enabled = false;  // Debug logging flag
-bool test_running = false;   // Test sequence running flag
-uint8_t test_step = 0;       // Current test step
-unsigned long test_timer = 0;  // Test step timer
-
-// ========== SERVO CONFIGURATION ==========
-inline float servoToKinematics(int joint, float servo_angle) {
-    // Convert servo angle to kinematics angle (degrees from neutral)
-    return servo_angle - SERVO_NEUTRALS[joint];
-}
-
-inline float kinematicsToServo(int joint, float kinematics_angle) {
-    // Convert kinematics angle (degrees from neutral) to servo angle
-    return SERVO_NEUTRALS[joint] + kinematics_angle;
-}
 
 // ========== UTILITY FUNCTIONS ==========
 void debug(const char* msg) {
     if (debug_enabled) {
-        Serial.print("DBG: ");
+        Serial.print(F("DBG: "));
         Serial.println(msg);
     }
 }
@@ -55,7 +68,7 @@ void debugPos(float x, float y, float z) {
 }
 
 void setJoint(int j, float deg) {
-    if (j >= 0 && j < 6) {
+    if (j >= 0 && j < 7) {
         float orig_deg = deg;
         deg = constrain(deg, SERVO_MIN_ANGLES[j], SERVO_MAX_ANGLES[j]);
         if (orig_deg != deg && debug_enabled) {
@@ -68,7 +81,7 @@ void setJoint(int j, float deg) {
 }
 
 void setTargetJoint(int j, float deg) {
-    if (j >= 0 && j < 6) {
+    if (j >= 0 && j < 7) {
         target_angles[j] = constrain(deg, SERVO_MIN_ANGLES[j], SERVO_MAX_ANGLES[j]);
     }
 }
@@ -78,126 +91,194 @@ void startSmoothMove() {
     is_moving = true;
 }
 
-// Test position calculation based on robot dimensions
-// Calculate positions as percentages of max reach and height
-void calculateTestPosition(int test_index, float* x, float* y, float* z, float* ry, float* rz) {
-    float max_reach = L2 + L3 + L4;  // Maximum horizontal reach
-    float max_height = PLATFORM_HEIGHT + L1 + L2 + L3 + L4;  // Maximum height
-    float min_height = PLATFORM_HEIGHT + L1;  // Minimum reachable height
-    float safe_reach = max_reach * 0.7;  // 70% of max reach for safety
-    
-    switch (test_index) {
-        case 0: case 6:  // HOME positions
-            *x = 0; *y = PLATFORM_HEIGHT + L1 + L2; *z = 0;
-            *ry = 0; *rz = 0;
-            break;
-        case 1:  // CLOSE HIGH LEFT - very close to base, up high, wrist angled
-            *x = 0; 
-            *y = min_height + (max_height - min_height) * 0.8;
-            *z = safe_reach * 0.3;
-            *ry = -30; *rz = -45;
-            break;
-        case 2:  // FAR RIGHT LOW - far reach right and forward, down low
-            *x = safe_reach * 0.7;
-            *y = min_height + (max_height - min_height) * 0.4;
-            *z = safe_reach * 0.8;
-            *ry = 25; *rz = 30;
-            break;
-        case 3:  // FAR LEFT HIGH - far reach left, up high, wrist tilted  
-            *x = -safe_reach * 0.6;
-            *y = min_height + (max_height - min_height) * 0.7;
-            *z = safe_reach * 0.5;
-            *ry = -20; *rz = -30;
-            break;
-        case 4:  // CLOSE RIGHT LOW - close to base, right side, low, wrist extreme
-            *x = safe_reach * 0.4;
-            *y = min_height + (max_height - min_height) * 0.3;
-            *z = safe_reach * 0.4;
-            *ry = 40; *rz = 45;
-            break;
-        case 5:  // FAR LEFT MID - far reach left, mid height, wrist opposite
-            *x = -safe_reach * 0.5;
-            *y = min_height + (max_height - min_height) * 0.6;
-            *z = safe_reach * 0.7;
-            *ry = 30; *rz = -40;
-            break;
-    }
-}
-
-void runTestSequence() {
-    if (!test_running || is_moving) return;
-    
-    if (millis() - test_timer < 3000) return;  // Wait 3 seconds between moves
-    
-    if (test_step >= 7) {
-        Serial.println(F("TEST: Complete - All extreme positions tested"));
-        test_running = false;
-        test_step = 0;
-        return;
+// ========== CONFIGURABLE DH KINEMATICS ==========
+// Forward kinematics using configured DH parameters
+void forwardKin6DOF(float* pos, float* rot) {
+    // Convert servo angles to DH joint angles (radians)
+    float theta[6];
+    for (int i = 0; i < 6; i++) {
+        theta[i] = (angles[i] - SERVO_NEUTRALS[i]) * DEG_TO_RAD;
     }
     
-    // Calculate test position based on robot dimensions
-    float x, y, z, ry, rz;
-    calculateTestPosition(test_step, &x, &y, &z, &ry, &rz);
+    // Compute transformation matrices using DH parameters
+    // T_i^{i-1} = Rot_z(theta_i) * Trans_z(d_i) * Trans_x(a_i) * Rot_x(alpha_i)
     
-    Serial.print(F("TEST: Step "));
-    Serial.print(test_step + 1);
+    // Pre-compute trigonometric values
+    float c[6], s[6], ca[6], sa[6];
+    for (int i = 0; i < 6; i++) {
+        c[i] = cos(theta[i]);
+        s[i] = sin(theta[i]);
+        ca[i] = cos(DH_alpha[i]);
+        sa[i] = sin(DH_alpha[i]);
+    }
     
-    // Special case for HOME positions
-    if ((test_step == 0) || (test_step == 6)) {
-        Serial.println(F(" - HOME"));
-        for (int i = 0; i < 6; i++) setTargetJoint(i, SERVO_NEUTRALS[i]);
-        startSmoothMove();
-    } else {
-        // Descriptive test names for extreme kinematic positions
-        const char* test_names[] = {
-            "", "CLOSE-HIGH-LEFT", "FAR-RIGHT-LOW", "FAR-LEFT-HIGH", 
-            "CLOSE-RIGHT-LOW", "FAR-LEFT-MID"
+    // Build cumulative transformation T_6^0 = T_1^0 * T_2^1 * ... * T_6^5
+    // Using efficient matrix multiplication for position and orientation
+    
+    // Initialize with identity
+    float T[4][4] = {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0,0,1}};
+    
+    // Apply each DH transformation
+    for (int i = 0; i < 6; i++) {
+        // DH transformation matrix for joint i
+        float Ti[4][4] = {
+            {c[i], -s[i]*ca[i],  s[i]*sa[i], DH_a[i]*c[i]},
+            {s[i],  c[i]*ca[i], -c[i]*sa[i], DH_a[i]*s[i]},
+            {0,     sa[i],       ca[i],      DH_d[i]     },
+            {0,     0,           0,          1           }
         };
         
-        Serial.print(F(" - "));
-        Serial.print(test_names[test_step]);
-        Serial.print(F(" X")); Serial.print(x, 1);
-        Serial.print(F(" Y")); Serial.print(y, 1); 
-        Serial.print(F(" Z")); Serial.print(z, 1);
-        Serial.print(F(" RY")); Serial.print(ry, 1);
-        Serial.print(F(" RZ")); Serial.print(rz, 1);
-        Serial.println();
-        
-        // Use inverse kinematics - this will exercise all joints maximally
-        float result_angles[6];
-        if (inverseKin6DOF(x, y, z, 0, ry, rz, result_angles)) {
-            // Set all 6 joints including gripper for complete system test
-            for (int i = 0; i < 5; i++) {
-                setTargetJoint(i, result_angles[i]);
-            }
-            // Set gripper based on test step for variety
-            if (test_step == 2 || test_step == 4) {
-                setTargetJoint(5, 60);  // Close gripper for some tests
-            } else {
-                setTargetJoint(5, 120); // Open gripper for others
-            }
-            startSmoothMove();
-            
-            // Debug: Show joint angles being commanded
-            if (debug_enabled) {
-                Serial.print(F("DBG: Commanding joints: "));
-                for (int i = 0; i < 5; i++) {
-                    Serial.print(F("J")); Serial.print(i+1); 
-                    Serial.print(F("=")); Serial.print(result_angles[i]);
-                    Serial.print(F(" "));
+        // T = T * Ti (matrix multiplication)
+        float T_new[4][4];
+        for (int r = 0; r < 4; r++) {
+            for (int col = 0; col < 4; col++) {
+                T_new[r][col] = 0;
+                for (int k = 0; k < 4; k++) {
+                    T_new[r][col] += T[r][k] * Ti[k][col];
                 }
-                Serial.println();
             }
-        } else {
-            Serial.print(F("TEST: "));
-            Serial.print(test_names[test_step]);
-            Serial.println(F(" unreachable - skipping"));
+        }
+        
+        // Copy result back
+        for (int r = 0; r < 4; r++) {
+            for (int col = 0; col < 4; col++) {
+                T[r][col] = T_new[r][col];
+            }
         }
     }
     
-    test_step++;
-    test_timer = millis();
+    // Extract position from transformation matrix
+    pos[0] = T[0][3];  // x
+    pos[1] = T[1][3];  // y
+    pos[2] = T[2][3];  // z
+    
+    // Extract approach vector (3rd column of rotation matrix)
+    rot[0] = T[0][2];  // ax
+    rot[1] = T[1][2];  // ay
+    rot[2] = T[2][2];  // az
+}
+
+// Inverse kinematics for 6-DOF robot using configurable DH parameters
+// Implements analytical solution based on kinematic decoupling principle from doc/ik.md
+bool inverseKin6DOF(float x, float y, float z, float ax, float ay, float az, float* result_angles) {
+    // Step 1: Compute wrist center position (decouple position and orientation)
+    // p_W = p_e - d6 * approach_vector (from doc/ik.md)
+    float px_w = x - DH_d[5]*ax;
+    float py_w = y - DH_d[5]*ay;
+    float pz_w = z - DH_d[5]*az;
+    
+    // Step 2: Solve for first 3 joints using configured DH parameters
+    
+    // Joint 1 (base rotation): θ₁ = Atan2(p_Wy, p_Wx)
+    result_angles[0] = SERVO_NEUTRALS[0] + atan2(py_w, px_w) * RAD_TO_DEG;
+    
+    // For joints 2&3, we need to solve the 2R planar problem
+    // This depends on your specific arm geometry defined in DH_a[] and DH_d[]
+    
+    // Generic 2R solution - adapt based on your DH configuration:
+    float rho = sqrt(px_w*px_w + py_w*py_w);
+    
+    // If you have an anthropomorphic arm (a2 non-zero):
+    if (DH_a[1] > 0.1) {  // Has upper arm link
+        // Use 2-link arm solution with a2 and effective forearm length  
+        // For anthropomorphic arm: effective forearm combines a3 and d4 geometrically
+        float effective_forearm = sqrt(DH_a[2]*DH_a[2] + DH_d[3]*DH_d[3]);  // sqrt(a3² + d4²)
+        float c3 = (rho*rho + pz_w*pz_w - DH_a[1]*DH_a[1] - effective_forearm*effective_forearm) / (2*DH_a[1]*effective_forearm);
+        
+        if (c3 > 1.0 || c3 < -1.0) {
+            debug("IK unreachable - outside workspace");
+            return false;
+        }
+        
+        float s3_pos = sqrt(1.0 - c3*c3);  // Elbow-up solution
+        result_angles[2] = SERVO_NEUTRALS[2] + atan2(s3_pos, c3) * RAD_TO_DEG;
+        
+        float k1 = DH_a[1] + effective_forearm*c3;
+        float k2 = effective_forearm*s3_pos;
+        result_angles[1] = SERVO_NEUTRALS[1] + atan2(k1*pz_w - k2*rho, k1*rho + k2*pz_w) * RAD_TO_DEG;
+        
+    } else {
+        // Alternative arm configuration - implement based on your specific DH parameters
+        result_angles[1] = SERVO_NEUTRALS[1];  // Default
+        result_angles[2] = SERVO_NEUTRALS[2];  // Default
+    }
+    
+    // Step 3: Solve spherical wrist (J4-J6) using ZYZ Euler angles
+    // Compute R₃⁰ transformation matrix from first 3 joints
+    float q1_rad = (result_angles[0] - SERVO_NEUTRALS[0]) * DEG_TO_RAD;
+    float q2_rad = (result_angles[1] - SERVO_NEUTRALS[1]) * DEG_TO_RAD;
+    float q3_rad = (result_angles[2] - SERVO_NEUTRALS[2]) * DEG_TO_RAD;
+    
+    // Build R₃⁰ dynamically using actual DH parameters (first 3 joints)
+    // Compute T₃⁰ using same DH transformation as forward kinematics
+    float T30[4][4] = {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0,0,1}};
+    
+    // Apply first 3 DH transformations to get T₃⁰
+    for (int i = 0; i < 3; i++) {
+        float theta_i = (result_angles[i] - SERVO_NEUTRALS[i]) * DEG_TO_RAD;
+        float c_i = cos(theta_i), s_i = sin(theta_i);
+        float ca_i = cos(DH_alpha[i]), sa_i = sin(DH_alpha[i]);
+        
+        // DH transformation matrix for joint i
+        float Ti[4][4] = {
+            {c_i, -s_i*ca_i,  s_i*sa_i, DH_a[i]*c_i},
+            {s_i,  c_i*ca_i, -c_i*sa_i, DH_a[i]*s_i},
+            {0,    sa_i,      ca_i,     DH_d[i]     },
+            {0,    0,         0,        1           }
+        };
+        
+        // T30 = T30 * Ti
+        float T_new[4][4];
+        for (int r = 0; r < 4; r++) {
+            for (int col = 0; col < 4; col++) {
+                T_new[r][col] = 0;
+                for (int k = 0; k < 4; k++) {
+                    T_new[r][col] += T30[r][k] * Ti[k][col];
+                }
+            }
+        }
+        
+        // Copy result back
+        for (int r = 0; r < 4; r++) {
+            for (int col = 0; col < 4; col++) {
+                T30[r][col] = T_new[r][col];
+            }
+        }
+    }
+    
+    // Extract R₃⁰ from T₃⁰ (top-left 3x3 block)
+    float R30[3][3] = {
+        {T30[0][0], T30[0][1], T30[0][2]},
+        {T30[1][0], T30[1][1], T30[1][2]},
+        {T30[2][0], T30[2][1], T30[2][2]}
+    };
+    
+    // Transform approach vector to frame 3
+    float ax3 = R30[0][0]*ax + R30[0][1]*ay + R30[0][2]*az;
+    float ay3 = R30[1][0]*ax + R30[1][1]*ay + R30[1][2]*az;
+    float az3 = R30[2][0]*ax + R30[2][1]*ay + R30[2][2]*az;
+    
+    // Extract spherical wrist angles (ZYZ Euler angles from doc/ik.md)
+    float r_wrist = sqrt(ax3*ax3 + ay3*ay3);
+    
+    if (r_wrist < 1e-6) {
+        // Singular configuration - wrist aligned
+        result_angles[3] = SERVO_NEUTRALS[3];  // θ₄ = 0
+        result_angles[4] = SERVO_NEUTRALS[4] + atan2(r_wrist, az3) * RAD_TO_DEG;  // θ₅
+        result_angles[5] = SERVO_NEUTRALS[5];  // θ₆ = 0
+    } else {
+        // Non-singular: extract ZYZ Euler angles
+        result_angles[3] = SERVO_NEUTRALS[3] + atan2(ay3, ax3) * RAD_TO_DEG;       // θ₄
+        result_angles[4] = SERVO_NEUTRALS[4] + atan2(r_wrist, az3) * RAD_TO_DEG;   // θ₅
+        result_angles[5] = SERVO_NEUTRALS[5];  // θ₆ = 0 (simplified - full solution needs n,s vectors)
+    }
+    
+    // Constrain all angles to servo limits
+    for (int i = 0; i < 6; i++) {
+        result_angles[i] = constrain(result_angles[i], SERVO_MIN_ANGLES[i], SERVO_MAX_ANGLES[i]);
+    }
+    
+    return true;
 }
 
 void updateSmoothMotion() {
@@ -205,18 +286,17 @@ void updateSmoothMotion() {
     
     bool all_reached = true;
     static unsigned long last_debug = 0;
-    bool show_debug = debug_enabled && (millis() - last_debug > 500);  // Debug every 0.5s during motion
+    bool show_debug = debug_enabled && (millis() - last_debug > 500);
     
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 7; i++) {
         float diff = target_angles[i] - angles[i];
         
-        if (abs(diff) > 0.1) {  // 0.1 degree tolerance for better precision
+        if (abs(diff) > 0.1) {
             all_reached = false;
             
-            // Calculate step based on speed and actual loop delay
-            float step = MOVE_SPEED * (MAIN_LOOP_DELAY / 1000.0);  // Convert ms to seconds
+            float step = MOVE_SPEED * (MAIN_LOOP_DELAY / 1000.0);
             if (abs(diff) < step) {
-                angles[i] = target_angles[i];  // Snap to exact target
+                angles[i] = target_angles[i];
             } else {
                 angles[i] += (diff > 0) ? step : -step;
             }
@@ -229,11 +309,10 @@ void updateSmoothMotion() {
         debug("Motion complete");
         is_moving = false;
     } else if (show_debug) {
-        // Show current joint angles during movement (avoid expensive forward kinematics)
         Serial.print(F("DBG: Moving J["));
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 7; i++) {
             Serial.print(angles[i]);
-            if (i < 5) Serial.print(F(","));
+            if (i < 6) Serial.print(F(","));
         }
         Serial.println(F("]"));
         last_debug = millis();
@@ -252,113 +331,22 @@ float getFloat(String& str) {
     return val;
 }
 
-// ========== BASIC KINEMATICS ==========
-// Forward kinematics for full 6-DOF
-void forwardKin6DOF(float* pos, float* rot) {
-    float j1 = servoToKinematics(0, angles[0]) * DEG_TO_RAD;
-    float j2 = servoToKinematics(1, angles[1]) * DEG_TO_RAD;
-    float j3 = servoToKinematics(2, angles[2]) * DEG_TO_RAD;
-    float j4 = servoToKinematics(3, angles[3]) * DEG_TO_RAD;
-    float j5 = servoToKinematics(4, angles[4]) * DEG_TO_RAD;
-    
-    // Position calculation
-    float s1 = sin(j1), c1 = cos(j1);
-    float s2 = sin(j2), c2 = cos(j2);
-    float s23 = sin(j2 + j3), c23 = cos(j2 + j3);
-    
-    // End-effector position (wrist center + L4 extension)
-    float wrist_r = L2 * c2 + L3 * c23;  // Distance to wrist center in arm plane
-    float wrist_h = L2 * s2 + L3 * s23;  // Height to wrist center
-    
-    // Add L4 extension in the direction of the arm plane
-    float r = wrist_r + L4; 
-    pos[0] = r * s1;  // x
-    pos[1] = PLATFORM_HEIGHT + L1 + wrist_h;  // y
-    pos[2] = r * c1;  // z
-    
-    // End-effector orientation (simplified for direct wrist control)
-    rot[0] = 0;  // Roll - no dedicated roll joint (base rotation affects global orientation)
-    rot[1] = j4 * RAD_TO_DEG;  // Pitch - wrist up/down (J4)
-    rot[2] = j5 * RAD_TO_DEG;  // Yaw - wrist rotation (J5)
-}
-
-// 6-DOF Inverse Kinematics
-bool inverseKin6DOF(float x, float y, float z, float rx, float ry, float rz, float* result_angles) {
-    // For simplicity, solve position first, then orientation
-    
-    // Step 1: Solve for base rotation (J1) - servo-aware conversion
-    float base_angle_deg = atan2(x, z) * RAD_TO_DEG;
-    result_angles[0] = kinematicsToServo(0, base_angle_deg);
-    
-    // Step 2: Calculate 2D problem in arm plane
-    float r = sqrt(x*x + z*z) - L4;  // Distance from base to wrist (no L5)
-    float h = (y - PLATFORM_HEIGHT) - L1;  // Height from base (subtract platform height)
-    float d = sqrt(r*r + h*h);  // Distance to wrist center
-    
-    // Check reachability
-    if (d > L2 + L3 || d < abs(L2 - L3) || d < 0.1) {
-        debug("IK unreachable");
-        return false;  // Prevent division by zero
-    }
-    
-    // Step 3: Solve shoulder (J2) and elbow (J3) - servo-aware conversion
-    float cos_a = (L2*L2 + d*d - L3*L3) / (2*L2*d);
-    cos_a = constrain(cos_a, -1.0, 1.0);  // Prevent acos domain error
-    float a = acos(cos_a);
-    float b = atan2(h, r);
-    float shoulder_deg = (a + b) * RAD_TO_DEG;
-    result_angles[1] = kinematicsToServo(1, shoulder_deg);
-    
-    float cos_c = (L2*L2 + L3*L3 - d*d) / (2*L2*L3);
-    cos_c = constrain(cos_c, -1.0, 1.0);  // Prevent acos domain error
-    float c = acos(cos_c);
-    float elbow_deg = (3.14159 - c) * RAD_TO_DEG;
-    result_angles[2] = kinematicsToServo(2, elbow_deg);
-    
-    // Step 4: Solve wrist orientation (J4, J5)
-    
-    // Wrist control - direct degree mapping
-    result_angles[3] = kinematicsToServo(3, ry);  // Wrist pitch (J4)
-    result_angles[4] = kinematicsToServo(4, rz);  // Wrist yaw (J5)
-    
-    if (debug_enabled) {
-        Serial.print("DBG: Wrist calc - ry:");
-        Serial.print(ry);
-        Serial.print(" rz:");
-        Serial.print(rz);
-        Serial.print(" J4:");
-        Serial.print(result_angles[3]);
-        Serial.print(" J5:");
-        Serial.println(result_angles[4]);
-    }
-    
-    // Constrain all angles to servo limits
-    for (int i = 0; i < 5; i++) {
-        float original = result_angles[i];
-        result_angles[i] = constrain(result_angles[i], SERVO_MIN_ANGLES[i], SERVO_MAX_ANGLES[i]);
-        if (debug_enabled && original != result_angles[i]) {
-            Serial.print("DBG: J");
-            Serial.print(i+1);
-            Serial.print(" clamped: ");
-            Serial.print(original);
-            Serial.print(" -> ");
-            Serial.println(result_angles[i]);
-        }
-    }
-    
-    return true;
-}
-
 void getWorkspaceLimits(float* limits) {
-    // Returns [x_min, x_max, y_min, y_max, z_min, z_max]
-    float reach_max = L2 + L3 + L4;  // Maximum reach (no L5 - gripper doesn't affect workspace)
+    // Returns [x_min, x_max, y_min, y_max, z_min, z_max] based on configured DH parameters
     
+    // Calculate maximum reach from configured DH parameters
+    float reach_max = 0;
+    for (int i = 0; i < 6; i++) {
+        reach_max += sqrt(DH_a[i]*DH_a[i] + DH_d[i]*DH_d[i]);  // Combined reach contribution
+    }
+    
+    // Conservative workspace estimation
     limits[0] = -reach_max;  // x_min
     limits[1] = reach_max;   // x_max
-    limits[2] = PLATFORM_HEIGHT + L1 - (L2 + L3);  // y_min (lowest point including platform)
-    limits[3] = PLATFORM_HEIGHT + L1 + L2 + L3;    // y_max (highest point including platform)
-    limits[4] = -reach_max;  // z_min
-    limits[5] = reach_max;   // z_max
+    limits[2] = -reach_max;  // y_min  
+    limits[3] = reach_max;   // y_max
+    limits[4] = -reach_max/2;  // z_min (conservative)
+    limits[5] = reach_max;     // z_max
 }
 
 // ========== COMMAND PROCESSING ==========
@@ -370,55 +358,98 @@ void printState() {
     getWorkspaceLimits(limits);
     
     Serial.println(F("OK {"));
-    Serial.print("  \"joints\": [");
+    Serial.print(F("  \"joints\": ["));
     for (int i = 0; i < 6; i++) {
         Serial.print(angles[i]);
-        if (i < 5) Serial.print(", ");
+        if (i < 5) Serial.print(F(", "));
     }
-    Serial.println("],");
-    Serial.print("  \"pos\": [");
-    Serial.print(pos[0]); Serial.print(", ");
-    Serial.print(pos[1]); Serial.print(", ");
-    Serial.print(pos[2]); Serial.println("],");
-    Serial.print("  \"rot\": [");
-    Serial.print(rot[0]); Serial.print(", ");
-    Serial.print(rot[1]); Serial.print(", ");
-    Serial.print(rot[2]); Serial.println("],");
-    Serial.print("  \"workspace\": {");
-    Serial.print("\"x\": ["); Serial.print(limits[0]); Serial.print(", "); Serial.print(limits[1]); Serial.print("], ");
-    Serial.print("\"y\": ["); Serial.print(limits[2]); Serial.print(", "); Serial.print(limits[3]); Serial.print("], ");
-    Serial.print("\"z\": ["); Serial.print(limits[4]); Serial.print(", "); Serial.print(limits[5]); Serial.println("]}");
-    Serial.println("}");
+    Serial.println(F("],"));
+    Serial.print(F("  \"gripper\": ")); Serial.print(angles[6]); Serial.println(F(","));
+    Serial.print(F("  \"pos\": ["));
+    Serial.print(pos[0]); Serial.print(F(", "));
+    Serial.print(pos[1]); Serial.print(F(", "));
+    Serial.print(pos[2]); Serial.println(F("],"));
+    Serial.print(F("  \"approach\": ["));
+    Serial.print(rot[0]); Serial.print(F(", "));
+    Serial.print(rot[1]); Serial.print(F(", "));
+    Serial.print(rot[2]); Serial.println(F("],"));
+    Serial.print(F("  \"workspace\": {"));
+    Serial.print(F("\"x\": [")); Serial.print(limits[0]); Serial.print(F(", ")); Serial.print(limits[1]); Serial.print(F("], "));
+    Serial.print(F("\"y\": [")); Serial.print(limits[2]); Serial.print(F(", ")); Serial.print(limits[3]); Serial.print(F("], "));
+    Serial.print(F("\"z\": [")); Serial.print(limits[4]); Serial.print(F(", ")); Serial.print(limits[5]); Serial.println(F("]}"));
+    Serial.println(F("}"));
 }
 
 void processCmd() {
     cmd.trim();
     cmd.toUpperCase();
     
-    // Block movement commands during execution (except status/help/stop/test commands)
-    if (is_moving && cmd != "HELP" && cmd != "STATE" && cmd != "STOP" && cmd != "TEST" && !cmd.startsWith("DEBUG")) {
+    if (is_moving && cmd != "HELP" && cmd != "STATE" && cmd != "STOP" && !cmd.startsWith("DEBUG")) {
         debug("Command blocked - moving");
         Serial.println(F("ERR BUSY - Wait for current movement to finish"));
         return;
     }
     
     if (cmd == "HELP") {
-        Serial.println(F("OK Commands: HELP, STATE, MOVEJ, MOVEL, JOG, GRIP, HOME, STOP, TEST, DEBUG"));
+        Serial.println(F("OK Commands: HELP, STATE, MOVEJ, MOVE, JOG, GRIP, HOME, TEST1, TEST2, TEST3, STOP, DEBUG"));
         Serial.println(F("Examples:"));
         Serial.println(F("  MOVEJ J2 45"));
-        Serial.println(F("  MOVEL X 150 Y 200 Z 100 RX 0 RY 0 RZ 0"));
+        Serial.println(F("  MOVE X 150 Y 0 Z 100 AX 1 AY 0 AZ 0"));
         Serial.println(F("  JOG J1 15"));
+        Serial.println(F("  GRIP 60"));
+        Serial.println(F("  TEST1  // Extreme right reach"));
+        Serial.println(F("  TEST2  // High overhead pose"));
+        Serial.println(F("  TEST3  // Complex wrist orientation"));
         
     } else if (cmd == "STATE") {
         printState();
         
     } else if (cmd == "HOME") {
         debug("Homing all joints");
-        for (int i = 0; i < 6; i++) {
-            setTargetJoint(i, SERVO_NEUTRALS[i]);  // Move to neutral position
+        for (int i = 0; i < 7; i++) {
+            setTargetJoint(i, SERVO_NEUTRALS[i]);
         }
         startSmoothMove();
         Serial.println(F("OK Moving home"));
+        
+    } else if (cmd == "TEST1") {
+        // Extreme right reach - tests base rotation, shoulder extension, elbow bend
+        debug("Moving to TEST1 - extreme right reach");
+        setTargetJoint(0, 20);   // Base rotated far right
+        setTargetJoint(1, 45);   // Shoulder pitched down
+        setTargetJoint(2, 135);  // Elbow bent up
+        setTargetJoint(3, 160);  // Wrist roll
+        setTargetJoint(4, 45);   // Wrist pitch
+        setTargetJoint(5, 135);  // Wrist yaw
+        setTargetJoint(6, 45);   // Gripper partially closed
+        startSmoothMove();
+        Serial.println(F("OK Moving to TEST1 - extreme right reach"));
+        
+    } else if (cmd == "TEST2") {
+        // High overhead pose - tests vertical reach, wrist orientation
+        debug("Moving to TEST2 - high overhead pose");
+        setTargetJoint(0, 90);   // Base centered
+        setTargetJoint(1, 135);  // Shoulder pitched up high
+        setTargetJoint(2, 45);   // Elbow extended
+        setTargetJoint(3, 45);   // Wrist roll rotated
+        setTargetJoint(4, 135);  // Wrist pitched down
+        setTargetJoint(5, 60);   // Wrist yaw angled
+        setTargetJoint(6, 120);  // Gripper mostly open
+        startSmoothMove();
+        Serial.println(F("OK Moving to TEST2 - high overhead pose"));
+        
+    } else if (cmd == "TEST3") {
+        // Complex wrist orientation - tests all joints in unusual configuration
+        debug("Moving to TEST3 - complex wrist orientation");
+        setTargetJoint(0, 160);  // Base rotated far left
+        setTargetJoint(1, 120);  // Shoulder angled up
+        setTargetJoint(2, 60);   // Elbow partially bent
+        setTargetJoint(3, 30);   // Wrist roll extreme
+        setTargetJoint(4, 160);  // Wrist pitch extreme
+        setTargetJoint(5, 20);   // Wrist yaw extreme
+        setTargetJoint(6, 10);   // Gripper nearly closed
+        startSmoothMove();
+        Serial.println(F("OK Moving to TEST3 - complex wrist orientation"));
         
     } else if (cmd.startsWith("MOVEJ ")) {
         String params = cmd.substring(6);
@@ -441,10 +472,17 @@ void processCmd() {
                     setTargetJoint(j, limited_angle);
                     startSmoothMove();
                     
+                    Serial.print(F("OK "));
                     if (limited_angle != angle) {
-                        Serial.println("OK J" + String(j+1) + " limit reached at " + String(limited_angle));
+                        Serial.print(F("J"));
+                        Serial.print(j+1);
+                        Serial.print(F(" limit reached at "));
+                        Serial.println(limited_angle);
                     } else {
-                        Serial.println("OK Moving J" + String(j+1) + " to " + String(angle));
+                        Serial.print(F("Moving J"));
+                        Serial.print(j+1);
+                        Serial.print(F(" to "));
+                        Serial.println(angle);
                     }
                 } else {
                     Serial.println(F("ERR Invalid joint"));
@@ -454,16 +492,15 @@ void processCmd() {
             }
         }
         
-    } else if (cmd.startsWith("MOVEL ")) {
-        String params = cmd.substring(6);
-        float x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0;
+    } else if (cmd.startsWith("MOVE ")) {
+        String params = cmd.substring(5);
+        float x = 0, y = 0, z = 0, ax = 0, ay = 0, az = 1;  // Default approach vector
         
         while (params.length() > 0) {
             int spaceIdx = params.indexOf(' ');
             String token;
             
             if (spaceIdx == -1) {
-                // Last parameter - no more spaces
                 token = params;
                 params = "";
             } else {
@@ -474,21 +511,20 @@ void processCmd() {
             if (token == "X") x = getFloat(params);
             else if (token == "Y") y = getFloat(params);
             else if (token == "Z") z = getFloat(params);
-            else if (token == "RX") rx = getFloat(params);
-            else if (token == "RY") ry = getFloat(params);
-            else if (token == "RZ") rz = getFloat(params);
+            else if (token == "AX") ax = getFloat(params);
+            else if (token == "AY") ay = getFloat(params);
+            else if (token == "AZ") az = getFloat(params);
         }
-        
         
         debugPos(x, y, z);
         float result_angles[6];
-        if (inverseKin6DOF(x, y, z, rx, ry, rz, result_angles)) {
+        if (inverseKin6DOF(x, y, z, ax, ay, az, result_angles)) {
             debug("IK success");
-            for (int i = 0; i < 5; i++) setTargetJoint(i, result_angles[i]);  // Set target for first 5 joints
+            for (int i = 0; i < 6; i++) setTargetJoint(i, result_angles[i]);
             startSmoothMove();
-            Serial.println("OK Moving to pose");
+            Serial.println(F("OK Moving to pose"));
         } else {
-            Serial.println("ERR UNREACHABLE");
+            Serial.println(F("ERR UNREACHABLE"));
         }
         
     } else if (cmd.startsWith("JOG ")) {
@@ -516,13 +552,19 @@ void processCmd() {
                             Serial.print(F("DBG: Limit hit J"));
                             Serial.println(j+1);
                         }
-                        Serial.println("OK J" + String(j+1) + " limit reached at " + String(limited_angle));
+                        Serial.print(F("OK J"));
+                        Serial.print(j+1);
+                        Serial.print(F(" limit reached at "));
+                        Serial.println(limited_angle);
                     } else {
                         if (debug_enabled) {
                             Serial.print(F("DBG: Jog J"));
                             Serial.println(j+1);
                         }
-                        Serial.println("OK Jogging J" + String(j+1) + " to " + String(limited_angle));
+                        Serial.print(F("OK Jogging J"));
+                        Serial.print(j+1);
+                        Serial.print(F(" to "));
+                        Serial.println(limited_angle);
                     }
                 } else {
                     Serial.println(F("ERR Invalid joint"));
@@ -538,61 +580,45 @@ void processCmd() {
             Serial.print(F("DBG: Grip to "));
             Serial.println(percent);
         }
-        setTargetJoint(5, percent);
+        setTargetJoint(6, percent);  // Gripper is servo 7 (index 6)
         startSmoothMove();
-        Serial.println("OK Moving gripper");
+        Serial.println(F("OK Moving gripper"));
         
     } else if (cmd == "STOP") {
         debug("Emergency stop");
         is_moving = false;
-        if (test_running) {
-            test_running = false;
-            test_step = 0;
-            Serial.println("OK Movement and test stopped");
-        } else {
-            Serial.println("OK Movement stopped");
-        }
+        Serial.println(F("OK Movement stopped"));
         
     } else if (cmd == "DEBUG ON") {
         debug_enabled = true;
-        Serial.println("OK Debug enabled");
+        Serial.println(F("OK Debug enabled"));
         
     } else if (cmd == "DEBUG OFF") {
         debug_enabled = false;
-        Serial.println("OK Debug disabled");
+        Serial.println(F("OK Debug disabled"));
         
     } else if (cmd == "DEBUG") {
-        Serial.println(debug_enabled ? "OK Debug ON" : "OK Debug OFF");
-        
-    } else if (cmd == "TEST") {
-        if (test_running) {
-            Serial.println(F("ERR Test already running - use STOP to cancel"));
-        } else {
-            Serial.println(F("OK Starting workspace test sequence - 7 steps"));
-            test_running = true;
-            test_step = 0;
-            test_timer = millis();
-        }
+        Serial.println(debug_enabled ? F("OK Debug ON") : F("OK Debug OFF"));
         
     } else {
-        Serial.println("ERR Unknown command");
+        Serial.println(F("ERR Unknown command"));
     }
 }
 
 // ========== ARDUINO SETUP/LOOP ==========
 void setup() {
     Serial.begin(115200);
-    Serial.println("ZRO_MEK 6-DOF Robotic Arm - Ready");
+    Serial.println(F("ZRO_MEK 6-DOF Anthropomorphic Arm with Spherical Wrist - Ready"));
     
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 7; i++) {
         servos[i].attach(PINS[i]);
         angles[i] = SERVO_NEUTRALS[i];
         target_angles[i] = SERVO_NEUTRALS[i];
         servos[i].write(SERVO_NEUTRALS[i]);
-        delay(100);  // Give servos time to reach position
+        delay(100);
     }
     
-    Serial.println("Type HELP for commands");
+    Serial.println(F("Type HELP for commands"));
 }
 
 void loop() {
@@ -611,9 +637,6 @@ void loop() {
     
     // Update smooth motion
     updateSmoothMotion();
-    
-    // Run test sequence if active
-    runTestSequence();
     
     delay(MAIN_LOOP_DELAY);
 }
