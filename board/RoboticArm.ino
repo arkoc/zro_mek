@@ -1,6 +1,5 @@
 /*
  * ZRO_MEK 6-DOF Anthropomorphic Arm with Spherical Wrist + Gripper
- * Based on classical Denavit-Hartenberg convention
  */
 
 #include <Servo.h>
@@ -39,6 +38,7 @@ bool debug_enabled = false;  // Debug logging flag
 inline int logicalToServo(float logical_angle) {
     return (int)(logical_angle + 90);  // -90 becomes 0, +90 becomes 180, 0 becomes 90
 }
+
 void debug(const char* msg) {
     if (debug_enabled) {
         Serial.print(F("DBG: "));
@@ -113,8 +113,7 @@ void makeTransformFromRPY(float x, float y, float z,
   T[3][0] = 0.0; T[3][1] = 0.0; T[3][2] = 0.0; T[3][3] = 1.0;
 }
 
-// ========== CONFIGURABLE DH KINEMATICS ==========
-// Forward kinematics for Standard Anthropomorphic Arm with Spherical Wrist
+// ========== DH KINEMATICS ==========
 void forwardKin6DOF(float* pos, float* rot) {
 // TODO
 }
@@ -143,8 +142,7 @@ bool inverseKin6DOF(float x, float y, float z, float roll, float pitch, float ya
 
     float t5 = atan2(sqrt(1 - (sin(t1)*T[0][2] - cos(t1)*T[1][2])*(sin(t1)*T[0][2] - cos(t1)*T[1][2])), sin(t1)*T[0][2] - cos(t1)*T[1][2]);
 
-    float t6 = atan2(sin(t1)*T[0][1] - cos(t1)*T[1][1], -sin(t1)*T[0][1] + cos(t1)*T[1][1]);
-
+    float t6 = atan2(sin(t1)*T[0][1] - cos(t1)*T[1][1], -sin(t1)*T[0][0] + cost(t1)*T[1][0]);
 
     result_angles[0] = SERVO_NEUTRALS[0] + t1 * RAD_TO_DEG;
     result_angles[1] = SERVO_NEUTRALS[1] + t2 * RAD_TO_DEG;
@@ -152,6 +150,8 @@ bool inverseKin6DOF(float x, float y, float z, float roll, float pitch, float ya
     result_angles[3] = SERVO_NEUTRALS[3] + t4 * RAD_TO_DEG;
     result_angles[4] = SERVO_NEUTRALS[4] + t5 * RAD_TO_DEG;
     result_angles[5] = SERVO_NEUTRALS[5] + t6 * RAD_TO_DEG;
+
+    return true;
 }
 
 void updateSmoothMotion() {
