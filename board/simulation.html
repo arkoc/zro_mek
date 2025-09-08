@@ -191,17 +191,22 @@
                 <div class="dh-param">
                     <label>DH_a2:</label>
                     <input type="number" id="dh-a2" value="150" onchange="updateDHParams()">
-                    <span style="font-size: 0.8em; color: #aaa; margin-left: 10px;">Upper arm length</span>
+                    <span style="font-size: 0.8em; color: #aaa; margin-left: 10px;">hand1 - Upper arm</span>
                 </div>
                 <div class="dh-param">
-                    <label>DH_d4:</label>
-                    <input type="number" id="dh-d4" value="100" onchange="updateDHParams()">
-                    <span style="font-size: 0.8em; color: #aaa; margin-left: 10px;">Forearm offset</span>
+                    <label>DH_a3:</label>
+                    <input type="number" id="dh-a3" value="250" onchange="updateDHParams()">
+                    <span style="font-size: 0.8em; color: #aaa; margin-left: 10px;">hand2 + connector_top - Forearm</span>
                 </div>
                 <div class="dh-param">
                     <label>DH_d6:</label>
                     <input type="number" id="dh-d6" value="50" onchange="updateDHParams()">
-                    <span style="font-size: 0.8em; color: #aaa; margin-left: 10px;">Wrist extension</span>
+                    <span style="font-size: 0.8em; color: #aaa; margin-left: 10px;">tip + claw - Wrist extension</span>
+                </div>
+                <div class="dh-param">
+                    <label>DH_d1:</label>
+                    <input type="number" id="dh-d1" value="10" onchange="updateDHParams()">
+                    <span style="font-size: 0.8em; color: #aaa; margin-left: 10px;">base -> connector_bottom - Base height</span>
                 </div>
             </div>
 
@@ -222,7 +227,7 @@
         <div id="viewport">
             <div id="info">
                 Mouse: Left=Orbit, Right=Pan, Wheel=Zoom<br>
-                DH Parameters: a2 (upper arm), d4 (forearm), d6 (wrist extension)<br>
+                DH Parameters: a2 (upper arm), a3 (forearm), d6 (wrist ext), d1 (base height)<br>
                 Coordinate System: X(Red), Y(Green), Z(Blue)
             </div>
         </div>
@@ -237,11 +242,12 @@
         let robot = {};
         let joints = [];
         
-        // DH Parameters (configurable) - matching Arduino code structure
+        // DH Parameters (configurable) - matching Arduino code structure exactly
         let dhParams = {
-            a2: 150,   // Upper arm length (mm) - DH_a2
-            d4: 100,   // Forearm offset (mm) - DH_d4
-            d6: 50     // Wrist extension (mm) - DH_d6
+            a2: 150,   // DH_a2: hand1 - Upper arm length (mm)
+            a3: 250,   // DH_a3: hand2 + connector_top - Forearm length (mm)
+            d6: 50,    // DH_d6: tip + claw (minus actual claws) - Wrist extension (mm)
+            d1: 10     // DH_d1: base -> connector_bottom - Base height (mm)
         };
         
         // Joint angles (degrees)
@@ -425,12 +431,12 @@
             const shoulderGeometry = new THREE.BoxGeometry(25, 30, 50);
             const shoulderMesh = new THREE.Mesh(shoulderGeometry, new THREE.MeshLambertMaterial({ color: 0x808080 }));
             j2Group.add(shoulderMesh);
-            // Upper arm link
+            // Upper arm link (DH_a2)
             const upperArmGeometry = new THREE.BoxGeometry(15, dhParams.a2, 20);
             const upperArmMesh = new THREE.Mesh(upperArmGeometry, new THREE.MeshLambertMaterial({ color: 0x707070 }));
             upperArmMesh.position.y = dhParams.a2/2;
             j2Group.add(upperArmMesh);
-            j2Group.position.set(0, 35, 0); // Fixed base height for standard anthropomorphic structure
+            j2Group.position.set(0, dhParams.d1 + 25, 0); // Base height includes DH_d1
             robot.joints.push(j2Group);
             j1Group.add(j2Group); // J2 is child of J1
             
@@ -440,10 +446,10 @@
             const elbowGeometry = new THREE.BoxGeometry(20, 20, 30);
             const elbowMesh = new THREE.Mesh(elbowGeometry, new THREE.MeshLambertMaterial({ color: 0x808080 }));
             j3Group.add(elbowMesh);
-            // Forearm link (represents d4 offset in DH parameters)
-            const forearmGeometry = new THREE.BoxGeometry(10, dhParams.d4, 15);
+            // Forearm link (DH_a3)
+            const forearmGeometry = new THREE.BoxGeometry(10, dhParams.a3, 15);
             const forearmMesh = new THREE.Mesh(forearmGeometry, new THREE.MeshLambertMaterial({ color: 0x707070 }));
-            forearmMesh.position.y = dhParams.d4/2;
+            forearmMesh.position.y = dhParams.a3/2;
             j3Group.add(forearmMesh);
             j3Group.position.set(0, dhParams.a2, 0); // At end of upper arm (a2)
             robot.joints.push(j3Group);
@@ -454,7 +460,7 @@
             const wrist1Geometry = new THREE.BoxGeometry(18, 20, 22);
             const wrist1Mesh = new THREE.Mesh(wrist1Geometry, new THREE.MeshLambertMaterial({ color: 0x606060 }));
             j4Group.add(wrist1Mesh);
-            j4Group.position.set(0, dhParams.d4, 0); // At end of forearm (d4)
+            j4Group.position.set(0, dhParams.a3, 0); // At end of forearm (a3)
             robot.joints.push(j4Group);
             j3Group.add(j4Group); // J4 is child of J3
             
@@ -589,8 +595,9 @@
         
         function updateDHParams() {
             dhParams.a2 = parseFloat(document.getElementById('dh-a2').value);
-            dhParams.d4 = parseFloat(document.getElementById('dh-d4').value);
+            dhParams.a3 = parseFloat(document.getElementById('dh-a3').value);
             dhParams.d6 = parseFloat(document.getElementById('dh-d6').value);
+            dhParams.d1 = parseFloat(document.getElementById('dh-d1').value);
             
             // Recreate robot with new DH parameters
             createRobot();
