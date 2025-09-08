@@ -45,9 +45,6 @@ Arduino controller for a 6-DOF anthropomorphic robotic arm with spherical wrist 
 | `MOVE X <x> Y <y> Z <z> AX <ax> AY <ay> AZ <az>` | Move to position with approach vector | `MOVE X 200 Y 0 Z 150 AX 0 AY 0 AZ 1` |
 | `JOG J<n> <degrees>` | Jog joint incrementally | `JOG J2 15` |
 | `GRIP <angle>` | Set gripper position | `GRIP 60` |
-| `TEST1` | Extreme right reach pose | `TEST1` |
-| `TEST2` | High overhead pose | `TEST2` |
-| `TEST3` | Complex wrist orientation | `TEST3` |
 | `STOP` | Stop current movement | `STOP` |
 | `DEBUG ON/OFF` | Enable/disable debug logging | `DEBUG ON` |
 | `DEBUG` | Show debug status | `DEBUG` |
@@ -55,51 +52,62 @@ Arduino controller for a 6-DOF anthropomorphic robotic arm with spherical wrist 
 ## Examples
 
 ```
-HOME                                        // Move to neutral position (90°)
+HOME                                        // Move to neutral position (0°)
 STATE                                      // See current robot state  
 MOVEJ J1 45                               // Move base to 45°
-MOVEJ J2 60                               // Move shoulder to 60°
+MOVEJ J2 -30                              // Move shoulder to -30°
 MOVE X 200 Y 0 Z 150 AX 0 AY 0 AZ 1      // Move to position with downward approach
 JOG J3 -15                                // Fine adjust elbow -15°
-GRIP 45                                   // Close gripper to 45°
-TEST1                                     // Extreme right reach (all joints)
-TEST2                                     // High overhead pose (all joints)
-TEST3                                     // Complex wrist orientation (all joints)
+GRIP 45                                   // Set gripper to 45°
 STOP                                      // Emergency stop
 ```
 
 ## Configuration
 
-**Configure your robot's complete DH parameter table in the code:**
+**Configure your robot's variable DH parameters in the code:**
 
 ```cpp
-// *** CONFIGURE YOUR ROBOT'S DH PARAMETERS HERE ***
-constexpr float DH_a[6] = {0, 150, 0, 0, 0, 0};           // Link lengths (mm)
-constexpr float DH_alpha[6] = {HALF_PI, 0, HALF_PI, -HALF_PI, HALF_PI, 0};  // Link twists (rad)  
-constexpr float DH_d[6] = {0, 0, 0, 100, 0, 50};          // Link offsets (mm)
+// *** CONFIGURE YOUR ROBOT'S VARIABLE DH PARAMETERS HERE ***
+// Based on standard Anthropomorphic Arm with Spherical Wrist from doc/fk.md
+// Only these parameters are configurable - all others are fixed by the kinematic structure
+
+constexpr float DH_a2 = 150;   // Upper arm length (mm) - CONFIGURE FOR YOUR ROBOT
+constexpr float DH_d4 = 100;   // Forearm offset (mm) - CONFIGURE FOR YOUR ROBOT  
+constexpr float DH_d6 = 50;    // Wrist extension (mm) - CONFIGURE FOR YOUR ROBOT
 
 // Motion control
 constexpr float MOVE_SPEED = 100.0;  // degrees per second  
 constexpr float MAIN_LOOP_DELAY = 20; // Control loop rate (ms) = 50Hz
 ```
 
-**DH Parameter Explanation:**
-- **DH_a[]**: Link lengths between joint axes (mm)
-- **DH_alpha[]**: Link twists around x-axis (radians)  
-- **DH_d[]**: Link offsets along z-axis (mm)
-- **DH_theta[]**: Joint angles (automatically computed from servo positions)
+**Standard DH Table for Anthropomorphic Arm with Spherical Wrist:**
+Based on the kinematic structure from doc/fk.md, only 3 parameters are variable:
+
+| Link | a_i    | α_i      | d_i    | θ_i        |
+|------|--------|----------|--------|------------|
+| 1    | 0      | π/2      | 0      | θ₁ (var)   |
+| 2    | **a₂** | 0        | 0      | θ₂ (var)   |
+| 3    | 0      | π/2      | 0      | θ₃ (var)   |
+| 4    | 0      | -π/2     | **d₄** | θ₄ (var)   |
+| 5    | 0      | π/2      | 0      | θ₅ (var)   |
+| 6    | 0      | 0        | **d₆** | θ₆ (var)   |
+
+**Variable Parameters:**
+- **DH_a2**: Upper arm length (shoulder to elbow distance)
+- **DH_d4**: Forearm offset (elbow to wrist distance)  
+- **DH_d6**: Wrist extension (wrist to end-effector distance)
 
 ## Joint Limits
 
 | Joint | Min | Max | Neutral | Description |
 |-------|-----|-----|---------|-------------|
-| J1 (Base) | 0° | 180° | 90° | Base rotation |
-| J2 (Shoulder) | 0° | 180° | 90° | Shoulder pitch |
-| J3 (Elbow) | 0° | 180° | 90° | Elbow pitch |
-| J4 (Wrist Roll) | 0° | 180° | 90° | Wrist rotation |
-| J5 (Wrist Pitch) | 0° | 180° | 90° | Wrist up/down |
-| J6 (Wrist Yaw) | 0° | 180° | 90° | End-effector rotation |
-| Gripper | 0° | 180° | 90° | Gripper opening |
+| J1 (Base) | -90° | +90° | 0° | Base rotation |
+| J2 (Shoulder) | -90° | +90° | 0° | Shoulder pitch |
+| J3 (Elbow) | -90° | +90° | 0° | Elbow pitch |
+| J4 (Wrist Roll) | -90° | +90° | 0° | Wrist rotation |
+| J5 (Wrist Pitch) | -90° | +90° | 0° | Wrist up/down |
+| J6 (Wrist Yaw) | -90° | +90° | 0° | End-effector rotation |
+| Gripper | -90° | +90° | 0° | Gripper opening |
 
 ## Coordinate System
 
@@ -194,3 +202,32 @@ DEBUG OFF                   // Disable debug logging
 - **Reachable:** All positions within 300mm radius (with some orientation)
 - **Dexterous:** Subset of reachable space with full orientation control
 - **Singularities:** Shoulder, elbow, and wrist singularities exist
+
+## 3D Robot Simulation
+
+**File:** `simulation.html`
+
+A web-based 3D visualization and simulation tool for the 6-DOF robotic arm. Open the file in any modern web browser to:
+
+### Features:
+- **Interactive 3D robot model** with real-time joint control
+- **Configurable robot dimensions** (Base Height, Upper Arm, Forearm, Wrist Length, End Effector)
+- **Live position feedback** showing exact end-effector coordinates and approach vector
+- **3D coordinate grid system** with measurement markings every 50mm
+- **Joint angle sliders** (0-180°) for all 6 joints
+- **Visual tip indicator** (red sphere) showing calculated position point
+
+### Usage:
+1. Open `simulation.html` in your web browser
+2. Adjust robot dimensions to match your physical robot
+3. Use joint sliders to move the robot arm
+4. Watch real-time position calculations
+5. Use mouse controls: Left=Orbit, Right=Pan, Wheel=Zoom
+
+### Purpose:
+- **Design verification:** Test robot configurations before building
+- **Path planning:** Visualize robot movements and reach
+- **Kinematics validation:** Verify forward kinematics calculations
+- **Educational tool:** Understand 6-DOF arm behavior
+
+The simulation uses the same kinematics as the Arduino code for accurate position matching.
