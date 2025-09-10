@@ -7,12 +7,10 @@
 
 // ========== ROBOT CONFIGURATION ==========
 // DH Parameters (modify these according to your robot)
-const float a1 = 0.0;    // Link 1 length
-const float a2 = 100;    // Upper arm length
-const float a3 = 190;    // Forearm length
-const float d1 = 140;    // Base height
-const float d4 = 0;    // Wrist offset
-const float d6 = 110;   // End effector length
+const float a2 = 90;    // Upper arm length
+const float a3 = 200;    // Forearm length
+const float d1 = 130;    // Base height
+const float d6 = 120;   // End effector length
 
 // Servo configuration - 6 servos total (6 DOF)
 constexpr uint8_t PINS[6] = {3, 5, 6, 9, 10, 11};  // Servo pins
@@ -51,7 +49,7 @@ void debugPos(float x, float y, float z) {
 }
 
 // Convert kinematic angle to PWM angle for servo
-float kinematicToPWM(int joint, float kinematic_angle) {
+inline float kinematicToPWM(int joint, float kinematic_angle) {
     return kinematic_angle + JOINT_MAX_ANGLES[joint];
 }
 
@@ -80,31 +78,30 @@ void startSmoothMove() {
     is_moving = true;
 }
 
-
 void getTransformation(float T[4][4], float x, float y, float z, float roll, float pitch, float yaw) {
-  float cr = cos(roll);
-  float sr = sin(roll);
-  float cp = cos(pitch);
-  float sp = sin(pitch);
-  float cy = cos(yaw);
-  float sy = sin(yaw);
+  float cy = cos(roll);
+  float sy = sin(roll);
+  float cb = cos(pitch);
+  float sb = sin(pitch);
+  float ca = cos(yaw);
+  float sa = sin(yaw);
   
   // Row 0
-  T[0][0] = cy * cp;
-  T[0][1] = cy * sp * sr - sy * cr;
-  T[0][2] = cy * sp * cr + sy * sr;
+  T[0][0] = cb * cy;
+  T[0][1] = sa * sb * cy - ca * sy;
+  T[0][2] = ca * sb * cy + sa * sy;
   T[0][3] = x;
   
   // Row 1
-  T[1][0] = sy * cp;
-  T[1][1] = sy * sp * sr + cy * cr;
-  T[1][2] = sy * sp * cr - cy * sr;
+  T[1][0] = cb * sy;
+  T[1][1] = sa * sb * sy + ca * cy;
+  T[1][2] = ca * sb * sy - sa * cy;
   T[1][3] = y;
   
   // Row 2
-  T[2][0] = -sp;
-  T[2][1] = cp * sr;
-  T[2][2] = cp * cr;
+  T[2][0] = -sb;
+  T[2][1] = sa * cb;
+  T[2][2] = ca * cb;
   T[2][3] = z;
   
   // Row 3
@@ -215,11 +212,12 @@ void inverse_kinematics_all_solutions(float x, float y, float z, float roll, flo
     float T[4][4];
     getTransformation(T, x, y, z, roll * DEG_TO_RAD, pitch * DEG_TO_RAD, yaw * DEG_TO_RAD);
     
+    // Calculate wrist center position
     float p_Wx = x - d6 * T[0][2];
     float p_Wy = y - d6 * T[1][2];
     float p_Wz = z - d6 * T[2][2];
     
-    // precalculations
+    // Wrist center calculations
     float r = sqrt(p_Wx*p_Wx + p_Wy*p_Wy);
     float s = p_Wz - d1;
     
@@ -240,8 +238,8 @@ void inverse_kinematics_all_solutions(float x, float y, float z, float roll, flo
                 t3 = -t3;  // Negative angle for elbow down
             }
             
-            float t2 = asin(((a2 + a3*cos(t3))*s - a3*sin(t3)*r) / (r*r + s*s));
-            
+            float t2 = asin(((a2 + a3*cos(t3))*s - a3*sin(t3)*r) / (r*r + s*s));    
+
             // Two solutions for theta5 (wrist up/down)
             for (int i5 = 0; i5 < 2; i5++) {
                 float cos_t5 = sin(t1)*T[0][2] - cos(t1)*T[1][2];
@@ -302,11 +300,11 @@ void updateSmoothMotion() {
     for (int i = 0; i < 6; i++) {
         float diff = target_joint_angles[i] - joint_angles[i];
         
-        if (abs(diff) > 0.1) {
+        if (fabs(diff) > 0.1) {
             all_reached = false;
             
             float step = MOVE_SPEED * (MAIN_LOOP_DELAY / 1000.0);
-            if (abs(diff) < step) {
+            if (fabs(diff) < step) {
                 joint_angles[i] = target_joint_angles[i];
             } else {
                 joint_angles[i] += (diff > 0) ? step : -step;
@@ -350,7 +348,7 @@ void printState() {
     forward_kinematics(joint_angles, &x, &y, &z, &roll, &pitch, &yaw);
     
     // Calculate workspace limits
-    float max_reach = a2 + a3 + d4;
+    float max_reach = a2 + a3;
     
     Serial.println(F("OK {"));
     Serial.print(F("  \"joints\": ["));
@@ -388,7 +386,7 @@ void processCmd() {
         Serial.println(F("OK Commands: HELP, STATE, MOVEJ, MOVE, JOG, HOME, STOP, DEBUG"));
         Serial.println(F("Examples:"));
         Serial.println(F("  MOVEJ J2 45     // Move joint 2 to 45°"));
-        Serial.println(F("  MOVE X 150 Y 0 Z 100 ROLL 0 PITCH 0 YAW 0"));
+        Serial.println(F("  MOVE X 150 Y 0 Z 100 [ROLL 0] [PITCH 0] [YAW 0]"));
         Serial.println(F("  JOG J1 15       // Jog joint 1 by 15°"));
         Serial.println(F("Joint range: varies by servo (0° = neutral pose)"));
         
@@ -446,7 +444,13 @@ void processCmd() {
         
     } else if (cmd.startsWith("MOVE ")) {
         String params = cmd.substring(5);
-        float x = 0, y = 0, z = 0, roll = 0, pitch = 0, yaw = 0;  // Default orientation
+        if (params.length() == 0) {
+            Serial.println(F("ERR Missing parameters - Usage: MOVE X val Y val Z val [ROLL val] [PITCH val] [YAW val]"));
+            return;
+        }
+        
+        float x = NAN, y = NAN, z = NAN, roll = 0, pitch = 0, yaw = 0;
+        bool x_set = false, y_set = false, z_set = false;
         
         while (params.length() > 0) {
             int spaceIdx = params.indexOf(' ');
@@ -460,12 +464,73 @@ void processCmd() {
                 params = params.substring(spaceIdx + 1);
             }
             
-            if (token == "X") x = getFloat(params);
-            else if (token == "Y") y = getFloat(params);
-            else if (token == "Z") z = getFloat(params);
-            else if (token == "ROLL") roll = getFloat(params);
-            else if (token == "PITCH") pitch = getFloat(params);
-            else if (token == "YAW") yaw = getFloat(params);
+            if (token == "X") {
+                if (params.length() == 0) {
+                    Serial.println(F("ERR Missing value for X parameter"));
+                    return;
+                }
+                x = getFloat(params);
+                x_set = true;
+            } else if (token == "Y") {
+                if (params.length() == 0) {
+                    Serial.println(F("ERR Missing value for Y parameter"));
+                    return;
+                }
+                y = getFloat(params);
+                y_set = true;
+            } else if (token == "Z") {
+                if (params.length() == 0) {
+                    Serial.println(F("ERR Missing value for Z parameter"));
+                    return;
+                }
+                z = getFloat(params);
+                z_set = true;
+            } else if (token == "ROLL") {
+                if (params.length() == 0) {
+                    Serial.println(F("ERR Missing value for ROLL parameter"));
+                    return;
+                }
+                roll = getFloat(params);
+            } else if (token == "PITCH") {
+                if (params.length() == 0) {
+                    Serial.println(F("ERR Missing value for PITCH parameter"));
+                    return;
+                }
+                pitch = getFloat(params);
+            } else if (token == "YAW") {
+                if (params.length() == 0) {
+                    Serial.println(F("ERR Missing value for YAW parameter"));
+                    return;
+                }
+                yaw = getFloat(params);
+            } else if (token.length() > 0) {
+                Serial.print(F("ERR Invalid parameter: "));
+                Serial.println(token);
+                return;
+            }
+        }
+        
+        // Check parameter completeness
+        if (!x_set || !y_set || !z_set) {
+            Serial.println(F("ERR Missing required parameters - X, Y, and Z are required"));
+            return;
+        }
+        
+        // Validate parameter ranges
+        float max_reach = a2 + a3;
+        if (sqrt(x*x + y*y) > max_reach) {
+            Serial.println(F("ERR Position out of workspace - XY distance too large"));
+            return;
+        }
+        
+        if (z < (d1 - max_reach) || z > (d1 + max_reach)) {
+            Serial.println(F("ERR Position out of workspace - Z height invalid"));
+            return;
+        }
+        
+        if (roll < -180 || roll > 180 || pitch < -180 || pitch > 180 || yaw < -180 || yaw > 180) {
+            Serial.println(F("ERR Orientation angles must be between -180 and 180 degrees"));
+            return;
         }
         
         debugPos(x, y, z);
@@ -476,18 +541,13 @@ void processCmd() {
             Serial.print(yaw); Serial.println(F(")"));
         }
         
-        // Calculate inverse kinematics (convert angles to radians)
+        // Calculate inverse kinematics
         float result_angles[6];
-        if (inverse_kinematics(x, y, z, roll, pitch, yaw , result_angles)) {
-            // Check joint limits
-            if (checkJointLimits(result_angles)) {
-                debug("IK success");
-                for (int i = 0; i < 6; i++) setTargetJoint(i, result_angles[i]);
-                startSmoothMove();
-                Serial.println(F("OK Moving to pose"));
-            } else {
-                Serial.println(F("ERR UNREACHABLE - Joint limits"));
-            }
+        if (inverse_kinematics(x, y, z, roll, pitch, yaw, result_angles)) {
+            debug("IK success");
+            for (int i = 0; i < 6; i++) setTargetJoint(i, result_angles[i]);
+            startSmoothMove();
+            Serial.println(F("OK Moving to pose"));
         } else {
             Serial.println(F("ERR UNREACHABLE - No solution"));
         }
