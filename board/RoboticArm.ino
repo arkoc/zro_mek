@@ -16,7 +16,7 @@ const float d6 = 120;   // End effector length
 constexpr uint8_t PINS[6] = {3, 5, 6, 9, 10, 11};  // Servo pins
 
 // Kinematic joint limits in degrees
-constexpr float JOINT_MIN_ANGLES[6] = {-135, -90, -90, -135, -90, -135};  // 270° servo: ±135°, 180° servo: ±90°
+constexpr float JOINT_MIN_ANGLES[6] = {-135, -90, -90, -135, -90, -135}; 
 constexpr float JOINT_MAX_ANGLES[6] = {135, 90, 90, 135, 90, 135};
 
 // Motion control
@@ -32,6 +32,14 @@ bool is_moving = false;  // Movement state
 bool debug_enabled = false;  // Debug logging flag
 
 // ========== UTILITY FUNCTIONS ==========
+float wrapToPi(float angle) {
+  // fmodf gives remainder for floats
+  angle = fmodf(angle + M_PI, 2.0f * M_PI);
+  if (angle < 0)
+    angle += 2.0f * M_PI;
+  return angle - M_PI;
+}
+
 void debug(const char* msg) {
     if (debug_enabled) {
         Serial.print(F("DBG: "));
@@ -113,6 +121,15 @@ void getTransformation(float T[4][4], float x, float y, float z, float roll, flo
 
 
 void forward_kinematics(float joint_angles[6], float* x, float* y, float* z, float* roll, float* pitch, float* yaw) {
+    if (debug_enabled) {
+        Serial.print(F("DBG: FK input joints: ["));
+        for (int i = 0; i < 6; i++) {
+            Serial.print(joint_angles[i]);
+            if (i < 5) Serial.print(F(", "));
+        }
+        Serial.println(F("]"));
+    }
+    
     float t1 = (joint_angles[0]) * DEG_TO_RAD;
     float t2 = (joint_angles[1]) * DEG_TO_RAD;
     float t3 = (joint_angles[2]) * DEG_TO_RAD;
@@ -174,6 +191,16 @@ void forward_kinematics(float joint_angles[6], float* x, float* y, float* z, flo
     *roll *= RAD_TO_DEG;
     *pitch *= RAD_TO_DEG;
     *yaw *= RAD_TO_DEG;
+    
+    if (debug_enabled) {
+        Serial.print(F("DBG: FK output pos: ("));
+        Serial.print(*x); Serial.print(F(", "));
+        Serial.print(*y); Serial.print(F(", "));
+        Serial.print(*z); Serial.print(F(", "));
+        Serial.print(*roll); Serial.print(F(", "));
+        Serial.print(*pitch); Serial.print(F(", "));
+        Serial.print(*yaw); Serial.println(F(")"));
+    }
 }
 
 bool inverse_kinematics(float x, float y, float z, float roll, float pitch, float yaw, float* result_angles) {
@@ -197,6 +224,16 @@ bool inverse_kinematics(float x, float y, float z, float roll, float pitch, floa
         
         // If this solution is valid, copy it to result and return true
         if (valid) {
+            if (debug_enabled) {
+                Serial.print(F("DBG: IK selected solution "));
+                Serial.print(i);
+                Serial.print(F(": ["));
+                for (int j = 0; j < 6; j++) {
+                    Serial.print(solutions[i][j]);
+                    if (j < 5) Serial.print(F(", "));
+                }
+                Serial.println(F("]"));
+            }
             for (int j = 0; j < 6; j++) {
                 result_angles[j] = solutions[i][j];
             }
@@ -209,6 +246,18 @@ bool inverse_kinematics(float x, float y, float z, float roll, float pitch, floa
 }
 
 void inverse_kinematics_all_solutions(float x, float y, float z, float roll, float pitch, float yaw, float solutions[8][6]) {
+    // TODO: break when you already calculated a theta that is way off from our limits
+    
+    if (debug_enabled) {
+        Serial.print(F("DBG: IK target: ("));
+        Serial.print(x); Serial.print(F(", "));
+        Serial.print(y); Serial.print(F(", "));
+        Serial.print(z); Serial.print(F(", "));
+        Serial.print(roll); Serial.print(F(", "));
+        Serial.print(pitch); Serial.print(F(", "));
+        Serial.print(yaw); Serial.println(F(")"));
+    }
+    
     float T[4][4];
     getTransformation(T, x, y, z, roll * DEG_TO_RAD, pitch * DEG_TO_RAD, yaw * DEG_TO_RAD);
     
@@ -217,9 +266,23 @@ void inverse_kinematics_all_solutions(float x, float y, float z, float roll, flo
     float p_Wy = y - d6 * T[1][2];
     float p_Wz = z - d6 * T[2][2];
     
+    if (debug_enabled) {
+        Serial.print(F("DBG: Wrist center: ("));
+        Serial.print(p_Wx); Serial.print(F(", "));
+        Serial.print(p_Wy); Serial.print(F(", "));
+        Serial.print(p_Wz); Serial.println(F(")"));
+    }
+    
     // Wrist center calculations
     float r = sqrt(p_Wx*p_Wx + p_Wy*p_Wy);
     float s = p_Wz - d1;
+    
+    if (debug_enabled) {
+        Serial.print(F("DBG: r="));
+        Serial.print(r);
+        Serial.print(F(", s="));
+        Serial.println(s);
+    }
     
     int solution_idx = 0;
     
@@ -262,6 +325,17 @@ void inverse_kinematics_all_solutions(float x, float y, float z, float roll, flo
                 solutions[solution_idx][3] = t4 * RAD_TO_DEG;
                 solutions[solution_idx][4] = t5 * RAD_TO_DEG;
                 solutions[solution_idx][5] = t6 * RAD_TO_DEG;
+                
+                if (debug_enabled) {
+                    Serial.print(F("DBG: Sol "));
+                    Serial.print(solution_idx);
+                    Serial.print(F(": ["));
+                    for (int j = 0; j < 6; j++) {
+                        Serial.print(solutions[solution_idx][j]);
+                        if (j < 5) Serial.print(F(", "));
+                    }
+                    Serial.println(F("]"));
+                }
                 
                 solution_idx++;
             }
